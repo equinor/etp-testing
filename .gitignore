@@ -166,3 +166,6 @@ cython_debug/
 *.gri
 *.h5
 *.epc
+
+# Token
+.token
