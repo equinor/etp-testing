@@ -1,3 +1,4 @@
 websockets
 black
 fastavro
+httpx

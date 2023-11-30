@@ -1,6 +1,6 @@
 services:
   open-etp-server:
-    image: community.opengroup.org:5555/osdu/platform/domain-data-mgmt-services/reservoir/open-etp-server/open-etp-server-v0-24-0
+    image: community.opengroup.org:5555/osdu/platform/domain-data-mgmt-services/reservoir/open-etp-server/open-etp-server-main:latest
     environment:
       RDMS_DATA_PARTITION_MODE: "single"
       RDMS_DATA_CONNECTIVITY_MODE: "osdu"
