@@ -2,3 +2,5 @@ websockets
 black
 fastavro
 httpx
+lxml
+numpy
