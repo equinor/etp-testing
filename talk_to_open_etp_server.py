@@ -1,3 +1,4 @@
+import sys
 import io
 import uuid
 import time
@@ -6,8 +7,9 @@ import json
 import datetime
 import warnings
 import pprint
-import lxml.etree as ET
+import enum
 
+import lxml.etree as ET
 import httpx
 import websockets
 import fastavro
@@ -48,31 +50,8 @@ def get_azurehost_capabilities(token: str):
 
 # token = get_token()
 # pprint.pprint(get_azurehost_capabilities(token))
-#
 # asyncio.run(hello_azurehost(token))
 # wat
-
-
-async def hello_localhost():
-    uri = "ws://localhost:9002"
-    async with websockets.connect(
-        uri,
-        subprotocols=["etp12.energistics.org"],
-    ) as ws:
-        print(ws.open)
-        ping = await ws.ping()
-        print(await ping)
-
-
-async def query_localhost(message):
-    uri = "ws://localhost:9002"
-    async with websockets.connect(
-        uri,
-        subprotocols=["etp12.energistics.org"],
-    ) as ws:
-        print(ws.open)
-        await ws.send(message)
-        return await ws.recv()
 
 
 def get_localhost_capabilities():
@@ -96,61 +75,24 @@ def parse_func(js, named_schemas=dict()):
 etp_schemas = dict(parse_func(js) for js in jschema["types"])
 
 
-# mh_record = dict(
-#     protocol=0,  # Core protocol
-#     messageType=1,  # RequestSession
-#     correlationId=0,  # Ignored for RequestSession
-#     messageId=2,  # non-zero, even numbers for the client
-#     messageFlags=0x2,  # FIN-bit
-# )
-#
-# rs_record = dict(
-#     applicationName="oycli",
-#     applicationVersion="0.0.1",
-#     clientInstanceId=uuid.uuid4().bytes,
-#     requestedProtocols=[
-#         dict(  # SupportedProtocol
-#             protocol=3,
-#             protocolVersion=dict(
-#                 major=1,
-#                 minor=2,
-#             ),
-#             role="store",
-#         ),
-#     ],
-#     supportedDataObjects=[
-#         dict(  # SupportedDataObject
-#             qualifiedType="resqml20.*",
-#         ),
-#     ],
-#     currentDateTime=datetime.datetime.now(datetime.timezone.utc).timestamp(),
-#     earliestRetainedChangeTime=0,
-#     serverAuthorizationRequired=False,
-# )
-#
-# asyncio.run(hello_localhost())
-#
-# fo = io.BytesIO()
-# # Write the message header
-# fastavro.write.schemaless_writer(fo, etp_schemas["Energistics.Etp.v12.Datatypes.MessageHeader"], mh_record)
-# # Write the request session body
-# fastavro.write.schemaless_writer(fo, etp_schemas["Energistics.Etp.v12.Protocol.Core.RequestSession"], rs_record)
-#
-# resp = asyncio.run(query_localhost(fo.getvalue()))
-#
-# fo = io.BytesIO(resp)
-# record = fastavro.read.schemaless_reader(
-#     fo,
-#     etp_schemas["Energistics.Etp.v12.Datatypes.MessageHeader"],
-#     return_record_name=True,
-# )
-# pprint.pprint(record)
-# record = fastavro.read.schemaless_reader(
-#     fo,
-#     etp_schemas["Energistics.Etp.v12.Protocol.Core.OpenSession"],
-#     return_record_name=True,
-# )
-# pprint.pprint(record)
+class MHFlags(enum.Enum):
+    FIN = 0x2
+    COMPRESSED = 0x8
+    ACK = 0x10
+    HEADER_EXTENSION = 0x20
+
+
+class MessageID:
+    def __init__(self, client=True):
+        # Client-side should use unique, increasing, positive, even message id's.
+        self.message_id = 2 if client else 1
+        self.lock = asyncio.Lock()
+
+    async def __call__(self):
+        async with self.lock:
+            ret_id = self.message_id
+            self.message_id += 2
+            return ret_id
 
 
 async def start_and_stop(url="ws://localhost:9002", headers={}):
@@ -160,8 +102,7 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
         extra_headers=headers,
         subprotocols=["etp12.energistics.org"],
     ) as ws:
-        # Client-side should use unique, increasing, positive, even message id's.
-        MSG_ID = 2
+        msg_id = MessageID(client=True)
 
         # TODO: Figure out how to set websocket max sizes
         # Request session, i.e., start the thingy
@@ -169,8 +110,8 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
             protocol=0,  # Core protocol
             messageType=1,  # RequestSession
             correlationId=0,  # Ignored for RequestSession
-            messageId=(MSG_ID := MSG_ID + 2),  # non-zero, even numbers for the client
-            messageFlags=0x2,  # FIN-bit
+            messageId=await msg_id(),  # non-zero, even numbers for the client
+            messageFlags=MHFlags.FIN.value,  # FIN-bit
         )
 
         rs_record = dict(
@@ -258,8 +199,8 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
             protocol=24,  # Dataspace
             messageType=1,  # GetDataspaces
             correlationId=0,  # Ignored
-            messageId=(MSG_ID := MSG_ID + 2),
-            messageFlags=0x2,  # Fin
+            messageId=await msg_id(),
+            messageFlags=MHFlags.FIN.value,  # Fin
         )
         gd_record = dict(
             storeLastWriteFilter=None,  # Include all dataspaces
@@ -278,6 +219,7 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
         # The final response message should have the fin-bit set in the message header
         await ws.send(fo.getvalue())
 
+        records = []
         while True:
             resp = await ws.recv()
 
@@ -295,6 +237,8 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
                     etp_schemas["Energistics.Etp.v12.Protocol.Core.ProtocolException"],
                     return_record_name=True,
                 )
+                pprint.pprint(record)
+                sys.exit(1)
             else:
                 record = fastavro.read.schemaless_reader(
                     fo,
@@ -303,9 +247,9 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
                     ],
                     return_record_name=True,
                 )
-            pprint.pprint(record)
+                records.append(record)
 
-            if (mh_record["messageFlags"] & 0x2) != 0:
+            if (mh_record["messageFlags"] & MHFlags.FIN.value) != 0:
                 # We have received a FIN-bit, i.e., the last reponse has been
                 # read.
                 print("Last message read from this protocol")
@@ -316,8 +260,8 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
             protocol=3,  # Store
             messageType=1,  # GetResources
             correlationId=0,  # Ignored
-            messageId=(MSG_ID := MSG_ID + 2),
-            messageFlags=0x2,
+            messageId=await msg_id(),
+            messageFlags=MHFlags.FIN.value,
         )
         gr_record = dict(  # GetResources
             context=dict(  # ContextInfo
@@ -370,7 +314,7 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
                 uris = [res["uri"] for res in record["resources"]]
             pprint.pprint(record)
 
-            if (mh_record["messageFlags"] & 0x2) != 0:
+            if (mh_record["messageFlags"] & MHFlags.FIN.value) != 0:
                 # We have received a FIN-bit, i.e., the last reponse has been
                 # read.
                 print("Last message read from this protocol")
@@ -387,8 +331,8 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
             protocol=4,  # Store
             messageType=1,  # GetDataObjects
             correlationId=0,  # Ignored
-            messageId=(MSG_ID := MSG_ID + 2),
-            messageFlags=0x2,  # Multi-part=False
+            messageId=await msg_id(),
+            messageFlags=MHFlags.FIN.value,  # Multi-part=False
         )
         gdo_record = dict(
             uris=dict((uri, uri) for uri in uris),
@@ -443,7 +387,7 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
 
             # pprint.pprint(record)
 
-            if (mh_record["messageFlags"] & 0x2) != 0:
+            if (mh_record["messageFlags"] & MHFlags.FIN.value) != 0:
                 # We have received a FIN-bit, i.e., the last reponse has been
                 # read.
                 print("Last message read from this protocol")
@@ -462,8 +406,8 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
             protocol=9,  # DataArray
             messageType=6,  # GetDataArrayMetadata
             correlationId=0,  # Ignored
-            messageId=(MSG_ID := MSG_ID + 2),
-            messageFlags=0x2,  # Multi-part=False
+            messageId=await msg_id(),
+            messageFlags=MHFlags.FIN.value,  # Multi-part=False
         )
         gdam_record = dict(
             dataArrays={
@@ -519,7 +463,7 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
                 dimensions = record["arrayMetadata"][sorted(pir)[0]]["dimensions"]
             pprint.pprint(record)
 
-            if (mh_record["messageFlags"] & 0x2) != 0:
+            if (mh_record["messageFlags"] & MHFlags.FIN.value) != 0:
                 # We have received a FIN-bit, i.e., the last reponse has been
                 # read.
                 print("Last message read from this protocol")
@@ -530,8 +474,8 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
             protocol=9,  # DataArray
             messageType=2,  # GetDataArrays
             correlationId=0,  # Ignored
-            messageId=(MSG_ID := MSG_ID + 2),
-            messageFlags=0x2,  # Multi-part=False
+            messageId=await msg_id(),
+            messageFlags=MHFlags.FIN.value,  # Multi-part=False
         )
         gda_record = dict(
             dataArrays={
@@ -591,7 +535,7 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
                 data = record["dataArrays"][sorted(pir)[0]]["data"]["item"]["values"]
             pprint.pprint(record)
 
-            if (mh_record["messageFlags"] & 0x2) != 0:
+            if (mh_record["messageFlags"] & MHFlags.FIN.value) != 0:
                 # We have received a FIN-bit, i.e., the last reponse has been
                 # read.
                 print("Last message read from this protocol")
@@ -605,8 +549,8 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
             protocol=9,  # DataArray
             messageType=3,  # GetDataSubrrays
             correlationId=0,  # Ignored
-            messageId=(MSG_ID := MSG_ID + 2),
-            messageFlags=0x2,  # Multi-part=False
+            messageId=await msg_id(),
+            messageFlags=MHFlags.FIN.value,  # Multi-part=False
         )
         gds_record = dict(
             dataSubarrays={
@@ -667,7 +611,7 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
                 ).reshape(record["dataSubarrays"][sorted(pir)[0]]["dimensions"])
             pprint.pprint(record)
 
-            if (mh_record["messageFlags"] & 0x2) != 0:
+            if (mh_record["messageFlags"] & MHFlags.FIN.value) != 0:
                 # We have received a FIN-bit, i.e., the last reponse has been
                 # read.
                 print("Last message read from this protocol")
@@ -678,8 +622,8 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
             protocol=9,  # DataArray
             messageType=3,  # GetDataSubrrays
             correlationId=0,  # Ignored
-            messageId=(MSG_ID := MSG_ID + 2),
-            messageFlags=0x2,  # Multi-part=False
+            messageId=await msg_id(),
+            messageFlags=MHFlags.FIN.value,  # Multi-part=False
         )
         gds_record = dict(
             dataSubarrays={
@@ -739,7 +683,7 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
                 ).reshape(record["dataSubarrays"][sorted(pir)[0]]["dimensions"])
             pprint.pprint(record)
 
-            if (mh_record["messageFlags"] & 0x2) != 0:
+            if (mh_record["messageFlags"] & MHFlags.FIN.value) != 0:
                 # We have received a FIN-bit, i.e., the last reponse has been
                 # read.
                 print("Last message read from this protocol")
@@ -754,8 +698,8 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
             protocol=0,  # Core
             messageType=5,  # CloseSession
             correlationId=0,  # Ignored
-            messageId=(MSG_ID := MSG_ID + 2),
-            messageFlags=0x2,
+            messageId=await msg_id(),
+            messageFlags=MHFlags.FIN.value,
         )
 
         cs_record = dict(
