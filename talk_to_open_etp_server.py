@@ -160,9 +160,10 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
         extra_headers=headers,
         subprotocols=["etp12.energistics.org"],
     ) as ws:
+        # Client-side should use unique, increasing, positive, even message id's.
         MSG_ID = 2
 
-        # TODO: Figure out how set websocket max sizes
+        # TODO: Figure out how to set websocket max sizes
         # Request session, i.e., start the thingy
         mh_record = dict(
             protocol=0,  # Core protocol
@@ -233,6 +234,9 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
         )
 
         await ws.send(fo.getvalue())
+
+        # Read the response
+        # TODO: Handle possible errors
         resp = await ws.recv()
 
         fo = io.BytesIO(resp)
@@ -536,7 +540,6 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
                 # EpcExternalPartReference!
                 key: dict(
                     uri=epc_uri,
-                    # pathInResource="/RESQML/49e4c1e1-891c-11ee-a655-4da4d0f45a8a/zvalues",
                     pathInResource=val,
                 )
                 for key, val in pir.items()
@@ -580,7 +583,11 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
                         "Energistics.Etp.v12.Protocol.DataArray.GetDataArraysResponse"
                     ],
                 )
-                # Note that GetDataArraysResponse includes the dimensions as well
+                # Note that GetDataArraysResponse includes the dimensions as well.
+                # This means that if we are getting the full array, we do not
+                # need to query the metadata first.
+                # However, it is probably a good idea to check the full size
+                # before requesting the entire array.
                 data = record["dataArrays"][sorted(pir)[0]]["data"]["item"]["values"]
             pprint.pprint(record)
 
@@ -590,7 +597,7 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
                 print("Last message read from this protocol")
                 break
 
-        data = np.asarray(data).reshape(dimensions[::-1])
+        data = np.asarray(data).reshape(dimensions)  # .reshape(dimensions[::-1])
         print(data.shape)
 
         # Get first 5 rows of the data array
@@ -609,7 +616,8 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
                         pathInResource=val,
                     ),
                     starts=[0, 0],
-                    counts=[12, 5],
+                    # XXX: The server crashes if the last axis of counts is too large
+                    counts=[3, 2],
                 )
                 for key, val in pir.items()
             },
@@ -656,7 +664,7 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
                 # Note that GetDataArraysResponse includes the dimensions as well
                 subdata = np.asarray(
                     record["dataSubarrays"][sorted(pir)[0]]["data"]["item"]["values"]
-                ).reshape(record["dataSubarrays"][sorted(pir)[0]]["dimensions"][::-1])
+                ).reshape(record["dataSubarrays"][sorted(pir)[0]]["dimensions"])
             pprint.pprint(record)
 
             if (mh_record["messageFlags"] & 0x2) != 0:
@@ -680,8 +688,8 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
                         uri=epc_uri,
                         pathInResource=val,
                     ),
-                    starts=[0, 5],
-                    counts=[12, 6],
+                    starts=[0, 2],
+                    counts=[3, 2],
                 )
                 for key, val in pir.items()
             },
@@ -728,7 +736,7 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
                 # Note that GetDataArraysResponse includes the dimensions as well
                 subdata_2 = np.asarray(
                     record["dataSubarrays"][sorted(pir)[0]]["data"]["item"]["values"]
-                ).reshape(record["dataSubarrays"][sorted(pir)[0]]["dimensions"][::-1])
+                ).reshape(record["dataSubarrays"][sorted(pir)[0]]["dimensions"])
             pprint.pprint(record)
 
             if (mh_record["messageFlags"] & 0x2) != 0:
@@ -737,20 +745,8 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
                 print("Last message read from this protocol")
                 break
 
-        subdata_rec = np.concatenate([subdata, subdata_2], axis=0)
-        np.testing.assert_allclose(sorted(subdata_rec.ravel()), sorted(data.ravel()))
-
-        print(subdata.shape, data[:, :5].shape, data[:5].shape)
-        print(data)
-        print("\n\n")
-        print(subdata)
-
-        print("\n\n")
-        print(subdata_2)
-
-        np.testing.assert_allclose(sorted(subdata.ravel()), sorted(data[:5].ravel()))
-        np.testing.assert_allclose(subdata, data[:5])
-
+        subdata_rec = np.concatenate([subdata, subdata_2], axis=1)
+        assert subdata_rec.shape == data.shape
         np.testing.assert_allclose(subdata_rec, data)
 
         # Close session
@@ -778,7 +774,7 @@ async def start_and_stop(url="ws://localhost:9002", headers={}):
 
         await ws.wait_closed()
         assert ws.closed
-        print(ws.close_reason)
+        print(f"Websocket close reason: {ws.close_reason}")
 
 
 # TODO: Populate localhost with data
