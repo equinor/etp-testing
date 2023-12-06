@@ -4,3 +4,4 @@ fastavro
 httpx
 lxml
 numpy
+resqpy
