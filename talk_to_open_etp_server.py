@@ -233,7 +233,6 @@ async def put_dataspaces(ws, dataspaces):
             for uri, path in zip(uris, paths)
         )
     )
-    pprint.pprint(pds_record)
 
     await ws.send(
         serialize_message(
@@ -273,6 +272,72 @@ async def delete_dataspaces(ws, dataspaces):
 
     return await handle_multipart_response(
         ws, "Energistics.Etp.v12.Protocol.Dataspace.DeleteDataspacesResponse"
+    )
+
+
+# TODO: Allow input of multiple data objects, the protocol supports a map of
+# data objects
+async def put_data_objects(ws, dataspace, data_objects):
+    # TODO: If 'data' is too large to fit in a single PutDataObjects-call, then
+    # we need to use chunks. Figure out how to do that.
+
+    # TODO: Improve parsing
+    if not dataspace.startswith("eml:///"):
+        dataspace = f"eml:///dataspace('{dataspace}')"
+
+    mh_record = dict(
+        protocol=4,  # Store
+        messageType=2,  # PutDataObjects
+        correlationId=0,  # Ignored
+        messageId=await ClientMessageId.get_next_id(),
+        # This is in general a multi-part message, but we will here only send
+        # one.
+        messageFlags=MHFlags.FIN.value,
+    )
+
+    time = datetime.datetime.now(datetime.timezone.utc).timestamp()
+    pprint.pprint(data_objects)
+    pdo_record = dict(
+        dataObjects={
+            # name=dict(
+            #     data=data,
+            #     resource=dict(
+            #         uri=uri,
+            #         name=name,
+            #         lastChanged=time,
+            #         storeCreated=time,
+            #         storeLastWrite=time,
+            #         activeStatus="Inactive",
+            #     ),
+            # )
+            title: dict(
+                data=ET.tostring(xml_data),
+                format="xml",
+                blobId=None,
+                resource=dict(
+                    uri=f"{dataspace}/{object_type}({_uuid})",
+                    name=title,
+                    lastChanged=time,
+                    storeCreated=time,
+                    storeLastWrite=time,
+                    activeStatus="Inactive",
+                ),
+            )
+            for (title, object_type, _uuid, xml_data) in data_objects
+        },
+    )
+
+    await ws.send(
+        serialize_message(
+            mh_record,
+            pdo_record,
+            "Energistics.Etp.v12.Protocol.Store.PutDataObjects",
+        )
+    )
+
+    return await handle_multipart_response(
+        ws,
+        "Energistics.Etp.v12.Protocol.Store.PutDataObjectsResponse",
     )
 
 
@@ -406,7 +471,7 @@ async def start_and_stop(
         # Create random test data
         model = resqpy.model.new_model("test.epc", quiet=False)
         # This needs to be done in order to get a uuid
-        crs = resqpy.crs.Crs(model)
+        crs = resqpy.crs.Crs(model, title="random-test-crs")
         crs.create_xml()
         z_values = np.random.random((3, 4))
         mesh = resqpy.surface.Mesh(
@@ -418,16 +483,75 @@ async def start_and_stop(
             origin=(np.random.random(), np.random.random(), 0.0),
             dxyz_dij=np.array([[1.0, 0.0, 0.0], [0.0, 0.5, 0.0]]),
             z_values=z_values,
-            title="Random test-data",
+            title="random-test-data",
             originator="someon",
         )
         mesh.create_xml()
-        print(model.roots()[0])
+        # print(model.roots()[0])
+
         # Check if we get the correct xml-document out
-        print(ET.tostring(model.roots()[1]))
+        # The xml looks much the same, except that the namespaces are different.
+        # They seem to refer to the same thing, but the name of the namespace
+        # is 'ns0' when printing from model.roots(), and 'resqml2' in the
+        # epc-file.
+        # Also, the namespace seems to be overwritten in model.roots(), and not
+        # in the epc-file.
+        # However, what matters is the namespace URI. See this SO-post:
+        # https://stackoverflow.com/questions/41774652/can-you-reuse-the-same-namespace-in-an-xml-document
+        # print(ET.tostring(model.roots()[1]))
+        # model.store_epc()
+
         # TODO: Check if we need to handle the external part reference manually
         # This might be handled by the server when it creates its own hdf5-file
         # print(model.external_parts_list())
+        # print("\n\n")
+        # print(model.parts_forest)
+        # print("\n\n")
+
+        data_objects = []
+        for key, item in model.parts_forest.items():
+            object_type, _uuid, xml_data = item
+            # Assuming a single "Citation" tag, with a single "Title" tag
+            title = next(
+                filter(
+                    lambda se: "Title" in se.tag,
+                    next(filter(lambda e: "Citation" in e.tag, xml_data.iter())).iter(),
+                )
+            ).text
+
+            if not object_type.startswith("resqml20") or not object_type.startswith(
+                "eml20"
+            ):
+                object_type = (
+                    f"resqml20.{object_type}"
+                    if "EpcExternalPart" not in object_type
+                    else f"eml20.{object_type}"
+                )
+
+            data_objects.append((title, object_type, _uuid, xml_data))
+
+        records = await put_data_objects(
+            ws,
+            dataspace,
+            data_objects,
+            # re.search(r"(obj_[a-zA-Z0-9]+)_*.*", model.parts()[0]).group(1),
+            # model.uuids()[0],
+            # model.titles()[0],
+            # ET.tostring(model.roots()[0]),
+        )
+        # pprint.pprint(records)
+
+        # TODO: There is some problem with references
+        # Try to get resources first and see if they can provide a clue
+        records = await put_data_objects(
+            ws,
+            dataspace,
+            re.search(r"(obj_[a-zA-Z0-9]+)_*.*", model.parts()[1]).group(1),
+            model.uuids()[1],
+            model.titles()[1],
+            ET.tostring(model.roots()[1]),
+        )
+        # pprint.pprint(records)
 
         # Here 'dataspace' exists
         await close_session(ws, "🙉")
