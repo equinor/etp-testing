@@ -1,4 +1,5 @@
 import re
+import os
 import sys
 import io
 import uuid
@@ -6,9 +7,11 @@ import time
 import asyncio
 import json
 import datetime
+import tempfile
 import warnings
 import pprint
 import enum
+import zipfile
 
 # Third-party imports
 import lxml.etree as ET
@@ -275,8 +278,6 @@ async def delete_dataspaces(ws, dataspaces):
     )
 
 
-# TODO: Allow input of multiple data objects, the protocol supports a map of
-# data objects
 async def put_data_objects(ws, dataspace, data_objects):
     # TODO: If 'data' is too large to fit in a single PutDataObjects-call, then
     # we need to use chunks. Figure out how to do that.
@@ -296,26 +297,16 @@ async def put_data_objects(ws, dataspace, data_objects):
     )
 
     time = datetime.datetime.now(datetime.timezone.utc).timestamp()
-    pprint.pprint(data_objects)
     pdo_record = dict(
         dataObjects={
-            # name=dict(
-            #     data=data,
-            #     resource=dict(
-            #         uri=uri,
-            #         name=name,
-            #         lastChanged=time,
-            #         storeCreated=time,
-            #         storeLastWrite=time,
-            #         activeStatus="Inactive",
-            #     ),
-            # )
             title: dict(
-                data=ET.tostring(xml_data),
+                # data=ET.tostring(xml_data),
+                data=xml_data,
                 format="xml",
                 blobId=None,
                 resource=dict(
                     uri=f"{dataspace}/{object_type}({_uuid})",
+                    # name=f"{dataspace}/{object_type}({_uuid})",
                     name=title,
                     lastChanged=time,
                     storeCreated=time,
@@ -338,6 +329,55 @@ async def put_data_objects(ws, dataspace, data_objects):
     return await handle_multipart_response(
         ws,
         "Energistics.Etp.v12.Protocol.Store.PutDataObjectsResponse",
+    )
+
+
+async def get_resources(
+    ws,
+    dataspace,
+    extra_context_info_args=dict(),
+    extra_get_resources_args=dict(),
+):
+    # TODO: Improve parsing
+    if not dataspace.startswith("eml:///"):
+        dataspace = f"eml:///dataspace('{dataspace}')"
+
+    # Get resources
+    mh_record = dict(
+        protocol=3,  # Store
+        messageType=1,  # GetResources
+        correlationId=0,  # Ignored
+        messageId=await ClientMessageId.get_next_id(),
+        messageFlags=MHFlags.FIN.value,
+    )
+    gr_record = {
+        **dict(  # GetResources
+            context={
+                **dict(  # ContextInfo
+                    uri=dataspace,
+                    depth=2,
+                    navigableEdges="Primary",
+                ),
+                **extra_context_info_args,
+            },
+            scope="targets",
+            storeLastWriteFilter=None,
+            activeStatusFilter=None,  # perhaps active?
+        ),
+        **extra_get_resources_args,
+    }
+
+    await ws.send(
+        serialize_message(
+            mh_record,
+            gr_record,
+            "Energistics.Etp.v12.Protocol.Discovery.GetResources",
+        )
+    )
+
+    return await handle_multipart_response(
+        ws,
+        "Energistics.Etp.v12.Protocol.Discovery.GetResourcesResponse",
     )
 
 
@@ -467,46 +507,49 @@ async def start_and_stop(
                 for record in records
                 for ds in record["dataspaces"]
             )
+        # Here 'dataspace' exists
 
-        # Create random test data
-        model = resqpy.model.new_model("test.epc", quiet=False)
-        # This needs to be done in order to get a uuid
-        crs = resqpy.crs.Crs(model, title="random-test-crs")
-        crs.create_xml()
-        z_values = np.random.random((3, 4))
-        mesh = resqpy.surface.Mesh(
-            model,
-            crs_uuid=model.crs_uuid,
-            mesh_flavour="reg&z",
-            ni=z_values.shape[1],  # rows
-            nj=z_values.shape[0],  # columns
-            origin=(np.random.random(), np.random.random(), 0.0),
-            dxyz_dij=np.array([[1.0, 0.0, 0.0], [0.0, 0.5, 0.0]]),
-            z_values=z_values,
-            title="random-test-data",
-            originator="someon",
-        )
-        mesh.create_xml()
-        # print(model.roots()[0])
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            # Note, resqpy does not seem to construct the correct xml-objects
+            # before they are written to disk. As such, we have to write to
+            # disk, then read in again to get the correct values. Here we do
+            # that using a temporary directory to ensure that data on disk is
+            # deleted after the context manager finishes.
 
-        # Check if we get the correct xml-document out
-        # The xml looks much the same, except that the namespaces are different.
-        # They seem to refer to the same thing, but the name of the namespace
-        # is 'ns0' when printing from model.roots(), and 'resqml2' in the
-        # epc-file.
-        # Also, the namespace seems to be overwritten in model.roots(), and not
-        # in the epc-file.
-        # However, what matters is the namespace URI. See this SO-post:
-        # https://stackoverflow.com/questions/41774652/can-you-reuse-the-same-namespace-in-an-xml-document
-        # print(ET.tostring(model.roots()[1]))
-        # model.store_epc()
+            # Create random test data
+            model = resqpy.model.new_model(
+                os.path.join(tmpdirname, "tmp.epc"), quiet=False
+            )
+            # This needs to be done in order to get a uuid
+            crs = resqpy.crs.Crs(model, title="random-test-crs")
+            crs.create_xml()
 
-        # TODO: Check if we need to handle the external part reference manually
-        # This might be handled by the server when it creates its own hdf5-file
-        # print(model.external_parts_list())
-        # print("\n\n")
-        # print(model.parts_forest)
-        # print("\n\n")
+            z_values = np.random.random((3, 4))
+
+            mesh = resqpy.surface.Mesh(
+                model,
+                crs_uuid=model.crs_uuid,
+                mesh_flavour="reg&z",
+                ni=z_values.shape[1],  # rows
+                nj=z_values.shape[0],  # columns
+                origin=(np.random.random(), np.random.random(), 0.0),
+                dxyz_dij=np.array([[1.0, 0.0, 0.0], [0.0, 0.5, 0.0]]),
+                z_values=z_values,
+                title="random-test-data",
+            )
+            mesh.create_xml()
+            # Write to disk (the hdf5-file is constructed already in the
+            # model-constructor)
+            mesh.write_hdf5()
+            model.store_epc()
+
+            dat = {}
+            with zipfile.ZipFile(model.epc_file, "r") as zfile:
+                for zinfo in filter(
+                    lambda x: x.filename.startswith("obj_"), zfile.infolist()
+                ):
+                    with zfile.open(zinfo.filename) as f:
+                        dat[zinfo.filename] = f.read()
 
         data_objects = []
         for key, item in model.parts_forest.items():
@@ -528,100 +571,20 @@ async def start_and_stop(
                     else f"eml20.{object_type}"
                 )
 
-            data_objects.append((title, object_type, _uuid, xml_data))
+            # data_objects.append((title, object_type, _uuid, xml_data))
+            data_objects.append((title, object_type, _uuid, dat[key]))
 
         records = await put_data_objects(
             ws,
             dataspace,
             data_objects,
-            # re.search(r"(obj_[a-zA-Z0-9]+)_*.*", model.parts()[0]).group(1),
-            # model.uuids()[0],
-            # model.titles()[0],
-            # ET.tostring(model.roots()[0]),
         )
-        # pprint.pprint(records)
 
-        # TODO: There is some problem with references
-        # Try to get resources first and see if they can provide a clue
-        records = await put_data_objects(
-            ws,
-            dataspace,
-            re.search(r"(obj_[a-zA-Z0-9]+)_*.*", model.parts()[1]).group(1),
-            model.uuids()[1],
-            model.titles()[1],
-            ET.tostring(model.roots()[1]),
-        )
-        # pprint.pprint(records)
+        records = await get_resources(ws, dataspace)
+        pprint.pprint(records)
 
-        # Here 'dataspace' exists
         await close_session(ws, "🙉")
         wat
-
-        # Get resources
-        mh_record = dict(
-            protocol=3,  # Store
-            messageType=1,  # GetResources
-            correlationId=0,  # Ignored
-            messageId=await ClientMessageId.get_next_id(),
-            messageFlags=MHFlags.FIN.value,
-        )
-        gr_record = dict(  # GetResources
-            context=dict(  # ContextInfo
-                uri="eml:///dataspace('demo/pss-rand')",
-                depth=2,
-                navigableEdges="Primary",
-            ),
-            scope="targets",
-            storeLastWriteFilter=None,
-            activeStatusFilter=None,  # perhaps active?
-        )
-
-        fo = io.BytesIO()
-        fastavro.write.schemaless_writer(
-            fo, etp_schemas["Energistics.Etp.v12.Datatypes.MessageHeader"], mh_record
-        )
-        fastavro.write.schemaless_writer(
-            fo,
-            etp_schemas["Energistics.Etp.v12.Protocol.Discovery.GetResources"],
-            gr_record,
-        )
-
-        await ws.send(fo.getvalue())
-
-        uris = []
-        while True:
-            resp = await ws.recv()
-
-            fo = io.BytesIO(resp)
-            mh_record = fastavro.read.schemaless_reader(
-                fo,
-                etp_schemas["Energistics.Etp.v12.Datatypes.MessageHeader"],
-                return_record_name=True,
-            )
-            pprint.pprint(mh_record)
-
-            if mh_record["messageType"] == 1000:
-                record = fastavro.read.schemaless_reader(
-                    fo,
-                    etp_schemas["Energistics.Etp.v12.Protocol.Core.ProtocolException"],
-                    return_record_name=True,
-                )
-            else:
-                record = fastavro.read.schemaless_reader(
-                    fo,
-                    etp_schemas[
-                        "Energistics.Etp.v12.Protocol.Discovery.GetResourcesResponse"
-                    ],
-                )
-                uris = [res["uri"] for res in record["resources"]]
-            pprint.pprint(record)
-
-            if (mh_record["messageFlags"] & MHFlags.FIN.value) != 0:
-                # We have received a FIN-bit, i.e., the last reponse has been
-                # read.
-                print("Last message read from this protocol")
-                break
-
         print(uris)
 
         epc_uri = list(filter(lambda x: "EpcExternalPartReference" in x, uris))[0]
