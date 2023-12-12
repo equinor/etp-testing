@@ -114,6 +114,42 @@ def serialize_message(header_record, body_record, body_schema_key):
     return fo.getvalue()
 
 
+def get_path_in_resource(xml):
+    if type(xml) in [str, bytes]:
+        xml = ET.fromstring(xml)
+
+    return xml.xpath("//*[starts-with(local-name(), 'PathInHdfFile')]")
+
+
+def get_title(xml):
+    if type(xml) in [str, bytes]:
+        xml = ET.fromstring(xml)
+
+    # Assuming a single "Citation" tag, with a single "Title" tag
+    return next(
+        filter(
+            lambda se: "Title" in se.tag,
+            next(filter(lambda e: "Citation" in e.tag, xml.iter())).iter(),
+        )
+    ).text
+
+
+def get_data_object_uri(dataspace, data_object_type, _uuid):
+    if not "eml:///dataspace" in dataspace:
+        dataspace = f"eml:///dataspace('{dataspace}')"
+
+    if not data_object_type.startswith("resqml20") or not data_object_type.startswith(
+        "eml20"
+    ):
+        data_object_type = (
+            f"resqml20.{data_object_type}"
+            if "EpcExternalPart" not in data_object_type
+            else f"eml20.{data_object_type}"
+        )
+
+    return f"{dataspace}/{data_object_type}({_uuid})"
+
+
 async def close_session(ws, reason):
     # Close session
     mh_record = dict(
@@ -278,13 +314,21 @@ async def delete_dataspaces(ws, dataspaces):
     )
 
 
-async def put_data_objects(ws, dataspace, data_objects):
+async def put_data_objects(ws, dataspace, data_object_types, uuids, xmls, titles=None):
     # TODO: If 'data' is too large to fit in a single PutDataObjects-call, then
     # we need to use chunks. Figure out how to do that.
 
-    # TODO: Improve parsing
-    if not dataspace.startswith("eml:///"):
-        dataspace = f"eml:///dataspace('{dataspace}')"
+    uris = [
+        get_data_object_uri(dataspace, dot, _uuid)
+        for dot, _uuid in zip(data_object_types, uuids)
+    ]
+
+    if not titles:
+        titles = uris
+
+    xmls = [xml if type(xml) in [str, bytes] else ET.tostring(xml) for xml in xmls]
+
+    time = datetime.datetime.now(datetime.timezone.utc).timestamp()
 
     mh_record = dict(
         protocol=4,  # Store
@@ -296,17 +340,14 @@ async def put_data_objects(ws, dataspace, data_objects):
         messageFlags=MHFlags.FIN.value,
     )
 
-    time = datetime.datetime.now(datetime.timezone.utc).timestamp()
     pdo_record = dict(
         dataObjects={
             title: dict(
-                # data=ET.tostring(xml_data),
-                data=xml_data,
+                data=xml,
                 format="xml",
                 blobId=None,
                 resource=dict(
-                    uri=f"{dataspace}/{object_type}({_uuid})",
-                    # name=f"{dataspace}/{object_type}({_uuid})",
+                    uri=uri,
                     name=title,
                     lastChanged=time,
                     storeCreated=time,
@@ -314,7 +355,7 @@ async def put_data_objects(ws, dataspace, data_objects):
                     activeStatus="Inactive",
                 ),
             )
-            for (title, object_type, _uuid, xml_data) in data_objects
+            for title, uri, xml in zip(titles, uris, xmls)
         },
     )
 
@@ -378,6 +419,131 @@ async def get_resources(
     return await handle_multipart_response(
         ws,
         "Energistics.Etp.v12.Protocol.Discovery.GetResourcesResponse",
+    )
+
+
+async def get_data_objects(ws, uris):
+    # Note, the uris contain the dataspace name, the data object type, and the
+    # uuid. An alternative to passing the complete uris would be to pass in
+    # each part separately. I am unsure what is easiest down the line.
+    # Note also that we use the uri as the name of the data object to ensure
+    # uniqueness.
+
+    # Get data objects
+    # If the number of uris is larger than the websocket size, we must send
+    # multiple GetDataObjects-requests. The returned data objects can also be
+    # too large, and would then require chunking.
+    mh_record = dict(
+        protocol=4,  # Store
+        messageType=1,  # GetDataObjects
+        correlationId=0,  # Ignored
+        messageId=await ClientMessageId.get_next_id(),
+        messageFlags=MHFlags.FIN.value,  # Multi-part=False
+    )
+    # Assuming that all uris fit in a single record, for now.
+    gdo_record = dict(
+        uris=dict((uri, uri) for _uris in uris for uri in _uris),
+        format="xml",
+    )
+
+    await ws.send(
+        serialize_message(
+            mh_record,
+            gdo_record,
+            "Energistics.Etp.v12.Protocol.Store.GetDataObjects",
+        )
+    )
+
+    return await handle_multipart_response(
+        ws,
+        "Energistics.Etp.v12.Protocol.Store.GetDataObjectsResponse",
+    )
+
+
+async def get_data_array_metadata(ws, epc_uri, path_in_resource):
+    # Get data array metadata
+    mh_record = dict(
+        protocol=9,  # DataArray
+        messageType=6,  # GetDataArrayMetadata
+        correlationId=0,  # Ignored
+        messageId=await ClientMessageId.get_next_id(),
+        messageFlags=MHFlags.FIN.value,  # Multi-part=False
+    )
+    gdam_record = dict(
+        dataArrays={
+            # XXX: Note that we use the pathInResource (pathInHdfFile) from
+            # the Grid2dRepresentation, but the uri is for
+            # EpcExternalPartReference!
+            key: dict(
+                uri=epc_uri,
+                pathInResource=val,
+            )
+            for key, val in path_in_resource.items()
+        },
+    )
+
+    await ws.send(
+        serialize_message(
+            mh_record,
+            gdam_record,
+            "Energistics.Etp.v12.Protocol.DataArray.GetDataArrayMetadata",
+        )
+    )
+
+    return await handle_multipart_response(
+        ws,
+        "Energistics.Etp.v12.Protocol.DataArray.GetDataArrayMetadataResponse",
+    )
+
+
+def numpy_array_to_etp_data_array(array):
+    return dict(
+        dimensions=list(array.shape),
+        # XXX: ?????????
+        # Where is it described that data should be a doubly-nested dictionary???
+        data=dict(item=dict(values=array.ravel().tolist())),
+    )
+
+
+async def put_data_arrays(
+    ws, dataspace, data_object_types, uuids, path_in_resources, arrays
+):
+    uris = [
+        get_data_object_uri(dataspace, dot, _uuid)
+        for dot, _uuid in zip(data_object_types, uuids)
+    ]
+
+    mh_record = dict(
+        protocol=9,  # DataArray
+        messageType=4,  # PutDataArrays
+        correlationId=0,  # Ignored
+        messageId=await ClientMessageId.get_next_id(),
+        messageFlags=MHFlags.FIN.value,  # Multi-part=False
+    )
+    pda_record = dict(
+        dataArrays={
+            uri: dict(
+                uid=dict(
+                    uri=uri,
+                    pathInResource=pir,
+                ),
+                array=numpy_array_to_etp_data_array(array),
+            )
+            for uri, pir, array in zip(uris, path_in_resources, arrays)
+        }
+    )
+
+    await ws.send(
+        serialize_message(
+            mh_record,
+            pda_record,
+            "Energistics.Etp.v12.Protocol.DataArray.PutDataArrays",
+        )
+    )
+
+    return await handle_multipart_response(
+        ws,
+        "Energistics.Etp.v12.Protocol.DataArray.PutDataArraysResponse",
     )
 
 
@@ -551,188 +717,79 @@ async def start_and_stop(
                     with zfile.open(zinfo.filename) as f:
                         dat[zinfo.filename] = f.read()
 
-        data_objects = []
+        data_object_types = []
+        uuids = []
+        xmls = []
+        titles = []
+        path_in_resources = []
         for key, item in model.parts_forest.items():
-            object_type, _uuid, xml_data = item
-            # Assuming a single "Citation" tag, with a single "Title" tag
-            title = next(
-                filter(
-                    lambda se: "Title" in se.tag,
-                    next(filter(lambda e: "Citation" in e.tag, xml_data.iter())).iter(),
-                )
-            ).text
+            dot, _uuid, xml = item
 
-            if not object_type.startswith("resqml20") or not object_type.startswith(
-                "eml20"
-            ):
-                object_type = (
-                    f"resqml20.{object_type}"
-                    if "EpcExternalPart" not in object_type
-                    else f"eml20.{object_type}"
-                )
+            titles.append(get_title(xml))
 
-            # data_objects.append((title, object_type, _uuid, xml_data))
-            data_objects.append((title, object_type, _uuid, dat[key]))
+            res = get_path_in_resource(xml)
+
+            if len(res) == 1:
+                path_in_resources.append(res[0].text)
+
+            data_object_types.append(dot)
+            uuids.append(_uuid)
+            # XXX: We have to use the xml from the etp-files, not directly from
+            # resqpy!!!
+            xmls.append(dat[key])
 
         records = await put_data_objects(
             ws,
             dataspace,
-            data_objects,
+            data_object_types,
+            uuids,
+            xmls,
+            titles=titles if len(titles) == len(set(titles)) else None,
+        )
+
+        grid_types, grid_uuids = zip(
+            *filter(lambda x: "Grid2d" in x[0], zip(data_object_types, uuids))
+        )
+        epc_types, epc_uuids = zip(
+            *filter(lambda x: "EpcExternal" in x[0], zip(data_object_types, uuids))
+        )
+
+        records = await put_data_arrays(
+            ws,
+            dataspace,
+            epc_types,
+            epc_uuids,
+            path_in_resources,
+            [z_values],
         )
 
         records = await get_resources(ws, dataspace)
+
+        uris = [
+            [resource["uri"] for resource in record["resources"]] for record in records
+        ]
+
+        records = await get_data_objects(ws, uris)
         pprint.pprint(records)
 
         await close_session(ws, "🙉")
         wat
-        print(uris)
-
-        epc_uri = list(filter(lambda x: "EpcExternalPartReference" in x, uris))[0]
-        print(epc_uri)
-
-        # Get data objects
-        # In case of small websocket packages, this can be sent (or returned) as chunks.
-        mh_record = dict(
-            protocol=4,  # Store
-            messageType=1,  # GetDataObjects
-            correlationId=0,  # Ignored
-            messageId=await ClientMessageId.get_next_id(),
-            messageFlags=MHFlags.FIN.value,  # Multi-part=False
-        )
-        gdo_record = dict(
-            uris=dict((uri, uri) for uri in uris),
-        )
-
-        fo = io.BytesIO()
-        fastavro.write.schemaless_writer(
-            fo, etp_schemas["Energistics.Etp.v12.Datatypes.MessageHeader"], mh_record
-        )
-        fastavro.write.schemaless_writer(
-            fo,
-            etp_schemas["Energistics.Etp.v12.Protocol.Store.GetDataObjects"],
-            gdo_record,
-        )
-
-        await ws.send(fo.getvalue())
-
-        uris = []
-        roots = []
-        while True:
-            resp = await ws.recv()
-
-            fo = io.BytesIO(resp)
-            mh_record = fastavro.read.schemaless_reader(
-                fo,
-                etp_schemas["Energistics.Etp.v12.Datatypes.MessageHeader"],
-                return_record_name=True,
-            )
-            pprint.pprint(mh_record)
-
-            if mh_record["messageType"] == 1000:
-                record = fastavro.read.schemaless_reader(
-                    fo,
-                    etp_schemas["Energistics.Etp.v12.Protocol.Core.ProtocolException"],
-                    return_record_name=True,
-                )
-            else:
-                record = fastavro.read.schemaless_reader(
-                    fo,
-                    etp_schemas[
-                        "Energistics.Etp.v12.Protocol.Store.GetDataObjectsResponse"
-                    ],
-                )
-                uris = [
-                    record["dataObjects"][obj]["resource"]["uri"]
-                    for obj in list(record["dataObjects"])
-                ]
-                roots = [
-                    ET.fromstring(record["dataObjects"][obj]["data"])
-                    for obj in list(record["dataObjects"])
-                ]
-
-            # pprint.pprint(record)
-
-            if (mh_record["messageFlags"] & MHFlags.FIN.value) != 0:
-                # We have received a FIN-bit, i.e., the last reponse has been
-                # read.
-                print("Last message read from this protocol")
-                break
 
         pir = {}
-        for uri, root in zip(uris, roots):
-            res = root.xpath("//*[starts-with(local-name(), 'PathInHdfFile')]")
-            if len(res) == 1:
-                print(uri, root, res[0].text)
-                pir[uri] = res[0].text
+        epc_uri = ""
+        for record in records:
+            for uri, items in record["dataObjects"].items():
+                assert uri == items["resource"]["uri"]
+                if "EpcExternalPart" in uri:
+                    epc_uri = uri
+                root = ET.fromstring(items["data"])
+                res = root.xpath("//*[starts-with(local-name(), 'PathInHdfFile')]")
+                if len(res) == 1:
+                    print(uri, root, res[0].text)
+                    pir[uri] = res[0].text
 
-        # Get data array metadata
-        # TODO: Figure out how to do more sophisticated querying
-        mh_record = dict(
-            protocol=9,  # DataArray
-            messageType=6,  # GetDataArrayMetadata
-            correlationId=0,  # Ignored
-            messageId=await ClientMessageId.get_next_id(),
-            messageFlags=MHFlags.FIN.value,  # Multi-part=False
-        )
-        gdam_record = dict(
-            dataArrays={
-                # XXX: Note that we use the pathInResource (pathInHdfFile) from
-                # the Grid2dRepresentation, but the uri is for
-                # EpcExternalPartReference!
-                key: dict(
-                    uri=epc_uri,
-                    # pathInResource="/RESQML/49e4c1e1-891c-11ee-a655-4da4d0f45a8a/zvalues",
-                    pathInResource=val,
-                )
-                for key, val in pir.items()
-            },
-        )
-
-        fo = io.BytesIO()
-        fastavro.write.schemaless_writer(
-            fo, etp_schemas["Energistics.Etp.v12.Datatypes.MessageHeader"], mh_record
-        )
-        fastavro.write.schemaless_writer(
-            fo,
-            etp_schemas["Energistics.Etp.v12.Protocol.DataArray.GetDataArrayMetadata"],
-            gdam_record,
-        )
-
-        await ws.send(fo.getvalue())
-
-        dimensions = []
-        while True:
-            resp = await ws.recv()
-
-            fo = io.BytesIO(resp)
-            mh_record = fastavro.read.schemaless_reader(
-                fo,
-                etp_schemas["Energistics.Etp.v12.Datatypes.MessageHeader"],
-                return_record_name=True,
-            )
-            pprint.pprint(mh_record)
-
-            if mh_record["messageType"] == 1000:
-                record = fastavro.read.schemaless_reader(
-                    fo,
-                    etp_schemas["Energistics.Etp.v12.Protocol.Core.ProtocolException"],
-                    return_record_name=True,
-                )
-            else:
-                record = fastavro.read.schemaless_reader(
-                    fo,
-                    etp_schemas[
-                        "Energistics.Etp.v12.Protocol.DataArray.GetDataArrayMetadataResponse"
-                    ],
-                )
-                dimensions = record["arrayMetadata"][sorted(pir)[0]]["dimensions"]
-            pprint.pprint(record)
-
-            if (mh_record["messageFlags"] & MHFlags.FIN.value) != 0:
-                # We have received a FIN-bit, i.e., the last reponse has been
-                # read.
-                print("Last message read from this protocol")
-                break
+        assert epc_uri != ""
+        records = await get_data_array_metadata(ws, epc_uri, pir)
 
         # Get full data array
         mh_record = dict(
