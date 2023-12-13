@@ -193,7 +193,6 @@ async def handle_multipart_response(ws, schema_key):
             record = fastavro.read.schemaless_reader(
                 fo,
                 etp_schemas["Energistics.Etp.v12.Protocol.Core.ProtocolException"],
-                return_record_name=True,
             )
             # Output error object
             pprint.pprint(record)
@@ -203,7 +202,6 @@ async def handle_multipart_response(ws, schema_key):
             record = fastavro.read.schemaless_reader(
                 fo,
                 etp_schemas[schema_key],
-                return_record_name=True,
             )
             records.append(record)
 
@@ -496,12 +494,18 @@ async def get_data_array_metadata(ws, epc_uri, path_in_resource):
     )
 
 
-def numpy_array_to_etp_data_array(array):
+def numpy_to_etp_data_array(array):
     return dict(
         dimensions=list(array.shape),
-        # XXX: ?????????
-        # Where is it described that data should be a doubly-nested dictionary???
+        # See Energistics.Etp.v12.Datatypes.AnyArray for the "item"-key, and
+        # Energistics.Etp.v12.Datatypes.ArrayOfDouble for the "values"-key.
         data=dict(item=dict(values=array.ravel().tolist())),
+    )
+
+
+def etp_data_array_to_numpy(data_array):
+    return np.asarray(data_array["data"]["item"]["values"]).reshape(
+        data_array["dimensions"]
     )
 
 
@@ -527,7 +531,7 @@ async def put_data_arrays(
                     uri=uri,
                     pathInResource=pir,
                 ),
-                array=numpy_array_to_etp_data_array(array),
+                array=numpy_to_etp_data_array(array),
             )
             for uri, pir, array in zip(uris, path_in_resources, arrays)
         }
@@ -544,6 +548,85 @@ async def put_data_arrays(
     return await handle_multipart_response(
         ws,
         "Energistics.Etp.v12.Protocol.DataArray.PutDataArraysResponse",
+    )
+
+
+async def get_data_arrays(ws, epc_uri, path_in_resources):
+    # TODO: Figure out how too large arrays are handled.
+    # Does this protocol respond with an error, and tell us that we need to use
+    # GetDataSubarrays instead, or does it return multiple responses?
+
+    # Get full data array
+    mh_record = dict(
+        protocol=9,  # DataArray
+        messageType=2,  # GetDataArrays
+        correlationId=0,  # Ignored
+        messageId=await ClientMessageId.get_next_id(),
+        messageFlags=MHFlags.FIN.value,  # Multi-part=False
+    )
+    gda_record = dict(
+        dataArrays={
+            # XXX: Note that we use the pathInResource (pathInHdfFile) from
+            # the Grid2dRepresentation, but the uri is for
+            # EpcExternalPartReference!
+            key: dict(
+                uri=epc_uri,
+                pathInResource=val,
+            )
+            for key, val in path_in_resources.items()
+        },
+    )
+
+    await ws.send(
+        serialize_message(
+            mh_record,
+            gda_record,
+            "Energistics.Etp.v12.Protocol.DataArray.GetDataArrays",
+        )
+    )
+
+    return await handle_multipart_response(
+        ws,
+        "Energistics.Etp.v12.Protocol.DataArray.GetDataArraysResponse",
+    )
+
+
+async def get_data_subarray(ws, epc_uri, path_in_resource, starts, counts, key=None):
+    # This method only supports the request of a single subarray.
+    # The protocol from ETP can support the request of multiple subarrays.
+
+    mh_record = dict(
+        protocol=9,  # DataArray
+        messageType=3,  # GetDataSubarrays
+        correlationId=0,  # Ignored
+        messageId=await ClientMessageId.get_next_id(),
+        messageFlags=MHFlags.FIN.value,  # Multi-part=False
+    )
+    gds_record = dict(
+        dataSubarrays={
+            key
+            or "0": dict(
+                uid=dict(
+                    uri=epc_uri,
+                    pathInResource=path_in_resource,
+                ),
+                starts=starts,
+                # XXX: The server crashes if the last axis of counts is too large
+                counts=counts,
+            )
+        },
+    )
+
+    await ws.send(
+        serialize_message(
+            mh_record,
+            gds_record,
+            "Energistics.Etp.v12.Protocol.DataArray.GetDataSubarrays",
+        )
+    )
+
+    return await handle_multipart_response(
+        ws, "Energistics.Etp.v12.Protocol.DataArray.GetDataSubarraysResponse"
     )
 
 
@@ -607,6 +690,9 @@ async def start_and_stop(
             supportedDataObjects=[
                 dict(  # SupportedDataObject
                     qualifiedType="resqml20.*",
+                ),
+                dict(
+                    qualifiedType="eml20.*",
                 ),
             ],
             currentDateTime=datetime.datetime.now(datetime.timezone.utc).timestamp(),
@@ -696,8 +782,8 @@ async def start_and_stop(
                 model,
                 crs_uuid=model.crs_uuid,
                 mesh_flavour="reg&z",
-                ni=z_values.shape[1],  # rows
-                nj=z_values.shape[0],  # columns
+                ni=z_values.shape[1],
+                nj=z_values.shape[0],
                 origin=(np.random.random(), np.random.random(), 0.0),
                 dxyz_dij=np.array([[1.0, 0.0, 0.0], [0.0, 0.5, 0.0]]),
                 z_values=z_values,
@@ -747,9 +833,6 @@ async def start_and_stop(
             titles=titles if len(titles) == len(set(titles)) else None,
         )
 
-        grid_types, grid_uuids = zip(
-            *filter(lambda x: "Grid2d" in x[0], zip(data_object_types, uuids))
-        )
         epc_types, epc_uuids = zip(
             *filter(lambda x: "EpcExternal" in x[0], zip(data_object_types, uuids))
         )
@@ -770,10 +853,6 @@ async def start_and_stop(
         ]
 
         records = await get_data_objects(ws, uris)
-        pprint.pprint(records)
-
-        await close_session(ws, "🙉")
-        wat
 
         pir = {}
         epc_uri = ""
@@ -785,235 +864,83 @@ async def start_and_stop(
                 root = ET.fromstring(items["data"])
                 res = root.xpath("//*[starts-with(local-name(), 'PathInHdfFile')]")
                 if len(res) == 1:
-                    print(uri, root, res[0].text)
                     pir[uri] = res[0].text
 
         assert epc_uri != ""
         records = await get_data_array_metadata(ws, epc_uri, pir)
 
-        # Get full data array
-        mh_record = dict(
-            protocol=9,  # DataArray
-            messageType=2,  # GetDataArrays
-            correlationId=0,  # Ignored
-            messageId=await ClientMessageId.get_next_id(),
-            messageFlags=MHFlags.FIN.value,  # Multi-part=False
-        )
-        gda_record = dict(
-            dataArrays={
-                # XXX: Note that we use the pathInResource (pathInHdfFile) from
-                # the Grid2dRepresentation, but the uri is for
-                # EpcExternalPartReference!
-                key: dict(
-                    uri=epc_uri,
-                    pathInResource=val,
-                )
-                for key, val in pir.items()
-            },
+        records = await get_data_arrays(ws, epc_uri, pir)
+
+        assert len(records) == 1
+
+        data = {
+            key: etp_data_array_to_numpy(records[0]["dataArrays"][key])
+            for key in sorted(pir)
+        }
+
+        assert data[sorted(data)[0]].shape == z_values.shape
+        np.testing.assert_allclose(
+            data[sorted(data)[0]],
+            z_values,
         )
 
-        fo = io.BytesIO()
-        fastavro.write.schemaless_writer(
-            fo, etp_schemas["Energistics.Etp.v12.Datatypes.MessageHeader"], mh_record
-        )
-        fastavro.write.schemaless_writer(
-            fo,
-            etp_schemas["Energistics.Etp.v12.Protocol.DataArray.GetDataArrays"],
-            gdam_record,
-        )
-
-        await ws.send(fo.getvalue())
-
-        data = []
-        while True:
-            resp = await ws.recv()
-
-            fo = io.BytesIO(resp)
-            mh_record = fastavro.read.schemaless_reader(
-                fo,
-                etp_schemas["Energistics.Etp.v12.Datatypes.MessageHeader"],
-                return_record_name=True,
-            )
-            pprint.pprint(mh_record)
-
-            if mh_record["messageType"] == 1000:
-                record = fastavro.read.schemaless_reader(
-                    fo,
-                    etp_schemas["Energistics.Etp.v12.Protocol.Core.ProtocolException"],
-                    return_record_name=True,
-                )
-            else:
-                record = fastavro.read.schemaless_reader(
-                    fo,
-                    etp_schemas[
-                        "Energistics.Etp.v12.Protocol.DataArray.GetDataArraysResponse"
-                    ],
-                )
-                # Note that GetDataArraysResponse includes the dimensions as well.
-                # This means that if we are getting the full array, we do not
-                # need to query the metadata first.
-                # However, it is probably a good idea to check the full size
-                # before requesting the entire array.
-                data = record["dataArrays"][sorted(pir)[0]]["data"]["item"]["values"]
-            pprint.pprint(record)
-
-            if (mh_record["messageFlags"] & MHFlags.FIN.value) != 0:
-                # We have received a FIN-bit, i.e., the last reponse has been
-                # read.
-                print("Last message read from this protocol")
-                break
-
-        data = np.asarray(data).reshape(dimensions)  # .reshape(dimensions[::-1])
-        print(data.shape)
-
-        # Get first 5 rows of the data array
-        mh_record = dict(
-            protocol=9,  # DataArray
-            messageType=3,  # GetDataSubrrays
-            correlationId=0,  # Ignored
-            messageId=await ClientMessageId.get_next_id(),
-            messageFlags=MHFlags.FIN.value,  # Multi-part=False
-        )
-        gds_record = dict(
-            dataSubarrays={
-                key: dict(
-                    uid=dict(
-                        uri=epc_uri,
-                        pathInResource=val,
-                    ),
-                    starts=[0, 0],
-                    # XXX: The server crashes if the last axis of counts is too large
-                    counts=[3, 2],
-                )
-                for key, val in pir.items()
-            },
+        records = await get_data_subarray(
+            ws,
+            epc_uri,
+            pir[sorted(pir)[0]],
+            starts=[0, 0],
+            counts=[2, 3],
+            key=sorted(pir)[0],
         )
 
-        fo = io.BytesIO()
-        fastavro.write.schemaless_writer(
-            fo, etp_schemas["Energistics.Etp.v12.Datatypes.MessageHeader"], mh_record
+        sub_data_1 = {
+            key: etp_data_array_to_numpy(records[0]["dataSubarrays"][key])
+            for key in sorted(pir)
+        }
+
+        records = await get_data_subarray(
+            ws,
+            epc_uri,
+            pir[sorted(pir)[0]],
+            starts=[0, 3],
+            counts=[2, 1],
+            key=sorted(pir)[0],
         )
-        fastavro.write.schemaless_writer(
-            fo,
-            etp_schemas["Energistics.Etp.v12.Protocol.DataArray.GetDataSubarrays"],
-            gds_record,
+        sub_data_2 = {
+            key: etp_data_array_to_numpy(records[0]["dataSubarrays"][key])
+            for key in sorted(pir)
+        }
+
+        records = await get_data_subarray(
+            ws,
+            epc_uri,
+            pir[sorted(pir)[0]],
+            starts=[2, 0],
+            counts=[1, 4],
+            key=sorted(pir)[0],
         )
+        sub_data_3 = {
+            key: etp_data_array_to_numpy(records[0]["dataSubarrays"][key])
+            for key in sorted(pir)
+        }
 
-        await ws.send(fo.getvalue())
-
-        subdata = []
-        while True:
-            resp = await ws.recv()
-
-            fo = io.BytesIO(resp)
-            mh_record = fastavro.read.schemaless_reader(
-                fo,
-                etp_schemas["Energistics.Etp.v12.Datatypes.MessageHeader"],
-                return_record_name=True,
-            )
-            pprint.pprint(mh_record)
-
-            if mh_record["messageType"] == 1000:
-                record = fastavro.read.schemaless_reader(
-                    fo,
-                    etp_schemas["Energistics.Etp.v12.Protocol.Core.ProtocolException"],
-                    return_record_name=True,
-                )
-            else:
-                record = fastavro.read.schemaless_reader(
-                    fo,
-                    etp_schemas[
-                        "Energistics.Etp.v12.Protocol.DataArray.GetDataSubarraysResponse"
-                    ],
-                )
-                pprint.pprint(record)
-                # Note that GetDataArraysResponse includes the dimensions as well
-                subdata = np.asarray(
-                    record["dataSubarrays"][sorted(pir)[0]]["data"]["item"]["values"]
-                ).reshape(record["dataSubarrays"][sorted(pir)[0]]["dimensions"])
-            pprint.pprint(record)
-
-            if (mh_record["messageFlags"] & MHFlags.FIN.value) != 0:
-                # We have received a FIN-bit, i.e., the last reponse has been
-                # read.
-                print("Last message read from this protocol")
-                break
-
-        # Get the last 6 rows of the data array
-        mh_record = dict(
-            protocol=9,  # DataArray
-            messageType=3,  # GetDataSubrrays
-            correlationId=0,  # Ignored
-            messageId=await ClientMessageId.get_next_id(),
-            messageFlags=MHFlags.FIN.value,  # Multi-part=False
+        subdata_rec = np.block(
+            [
+                [list(sub_data_1.values())[0], list(sub_data_2.values())[0]],
+                [list(sub_data_3.values())[0]],
+            ]
         )
-        gds_record = dict(
-            dataSubarrays={
-                key: dict(
-                    uid=dict(
-                        uri=epc_uri,
-                        pathInResource=val,
-                    ),
-                    starts=[0, 2],
-                    counts=[3, 2],
-                )
-                for key, val in pir.items()
-            },
-        )
+        np.testing.assert_allclose(list(data.values())[0], subdata_rec)
 
-        fo = io.BytesIO()
-        fastavro.write.schemaless_writer(
-            fo, etp_schemas["Energistics.Etp.v12.Datatypes.MessageHeader"], mh_record
-        )
-        fastavro.write.schemaless_writer(
-            fo,
-            etp_schemas["Energistics.Etp.v12.Protocol.DataArray.GetDataSubarrays"],
-            gds_record,
-        )
-
-        await ws.send(fo.getvalue())
-
-        subdata_2 = []
-        while True:
-            resp = await ws.recv()
-
-            fo = io.BytesIO(resp)
-            mh_record = fastavro.read.schemaless_reader(
-                fo,
-                etp_schemas["Energistics.Etp.v12.Datatypes.MessageHeader"],
-                return_record_name=True,
-            )
-            pprint.pprint(mh_record)
-
-            if mh_record["messageType"] == 1000:
-                record = fastavro.read.schemaless_reader(
-                    fo,
-                    etp_schemas["Energistics.Etp.v12.Protocol.Core.ProtocolException"],
-                    return_record_name=True,
-                )
-            else:
-                record = fastavro.read.schemaless_reader(
-                    fo,
-                    etp_schemas[
-                        "Energistics.Etp.v12.Protocol.DataArray.GetDataSubarraysResponse"
-                    ],
-                )
-                pprint.pprint(record)
-                # Note that GetDataArraysResponse includes the dimensions as well
-                subdata_2 = np.asarray(
-                    record["dataSubarrays"][sorted(pir)[0]]["data"]["item"]["values"]
-                ).reshape(record["dataSubarrays"][sorted(pir)[0]]["dimensions"])
-            pprint.pprint(record)
-
-            if (mh_record["messageFlags"] & MHFlags.FIN.value) != 0:
-                # We have received a FIN-bit, i.e., the last reponse has been
-                # read.
-                print("Last message read from this protocol")
-                break
-
-        subdata_rec = np.concatenate([subdata, subdata_2], axis=1)
-        assert subdata_rec.shape == data.shape
-        np.testing.assert_allclose(subdata_rec, data)
+        # Note, accessing too many columns crashes the server
+        # records = await get_data_subarray(
+        #     ws,
+        #     epc_uri,
+        #     pir[sorted(pir)[0]],
+        #     starts=[0, 0],
+        #     counts=[3, 5],
+        #     key=sorted(pir)[0],
+        # )
 
         await close_session(ws, "We are done 💅")
 
