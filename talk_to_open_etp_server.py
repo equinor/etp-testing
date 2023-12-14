@@ -35,21 +35,10 @@ def get_token(token_filename: str = ".token") -> str:
         return token
 
 
-async def hello_azurehost(token: str):
-    url = "wss://interop-rddms.azure-api.net"
-    header = {"Authorization": "Bearer " + token}
-    async with websockets.connect(
-        url,
-        subprotocols=["etp12.energistics.org"],
-        extra_headers={**header},
-    ) as ws:
-        print(ws.open)
-        ping = await ws.ping()
-        print(await ping)
-
-
 def get_azurehost_capabilities(token: str):
-    # TODO: Why doesn't this work???
+    # Note that this get-request seems to be blocked from the hosted server.
+    # However, it is not super important as the server responds with its
+    # limitations in the OpenSession protocol.
     url = "https://interop-rddms.azure-api.net/.well-known/etp-server-capabilities?GetVersion=etp12.energistics.org"
     headers = {"Authorization": "Bearer " + token}
     return httpx.get(url, headers=headers).raise_for_status().json()
@@ -57,8 +46,6 @@ def get_azurehost_capabilities(token: str):
 
 # token = get_token()
 # pprint.pprint(get_azurehost_capabilities(token))
-# asyncio.run(hello_azurehost(token))
-# wat
 
 
 def get_localhost_capabilities():
@@ -67,9 +54,11 @@ def get_localhost_capabilities():
 
 
 # pprint.pprint(get_localhost_capabilities())
-# wat
 
 
+# Read and store ETP-schemas in a global dictionary
+# The file etp.avpr can be downloaded from Energistics here:
+# https://publications.opengroup.org/standards/energistics-standards/energistics-transfer-protocol/v234
 with open("etp.avpr", "r") as foo:
     jschema = json.load(foo)
 
@@ -135,9 +124,6 @@ def get_title(xml):
 
 
 def get_data_object_uri(dataspace, data_object_type, _uuid):
-    if not "eml:///dataspace" in dataspace:
-        dataspace = f"eml:///dataspace('{dataspace}')"
-
     if not data_object_type.startswith("resqml20") or not data_object_type.startswith(
         "eml20"
     ):
@@ -147,7 +133,100 @@ def get_data_object_uri(dataspace, data_object_type, _uuid):
             else f"eml20.{data_object_type}"
         )
 
-    return f"{dataspace}/{data_object_type}({_uuid})"
+    return f"eml:///dataspace('{dataspace}')/{data_object_type}({_uuid})"
+
+
+async def request_session(
+    ws,
+    # Max size of a websocket message payload. Note that this value will most
+    # likely be updated from the server. The user should check the returned
+    # value instead.
+    max_payload_size=1e9,
+    application_name="somecli",
+    application_version="0.0.0",
+    additional_supported_protocols=[],
+    additional_supported_data_objects=[],
+):
+    # Request session
+    mh_record = dict(
+        protocol=0,  # Core protocol
+        messageType=1,  # RequestSession
+        correlationId=0,  # Ignored for RequestSession
+        messageId=await ClientMessageId.get_next_id(),
+        messageFlags=MHFlags.FIN.value,  # FIN-bit
+    )
+
+    rs_record = dict(
+        applicationName=application_name,
+        applicationVersion=application_version,
+        clientInstanceId=uuid.uuid4().bytes,
+        requestedProtocols=[  # [SupportedProtocol]
+            dict(
+                protocol=3,  # Discovery
+                protocolVersion=dict(
+                    major=1,
+                    minor=2,
+                ),
+                role="store",
+            ),
+            dict(
+                protocol=4,  # Store
+                protocolVersion=dict(
+                    major=1,
+                    minor=2,
+                ),
+                role="store",
+            ),
+            dict(
+                protocol=9,  # DataArray
+                protocolVersion=dict(
+                    major=1,
+                    minor=2,
+                ),
+                role="store",
+            ),
+            dict(
+                protocol=24,  # Dataspace
+                protocolVersion=dict(
+                    major=1,
+                    minor=2,
+                ),
+                role="store",
+            ),
+            *additional_supported_protocols,
+        ],
+        supportedDataObjects=[
+            dict(  # SupportedDataObject
+                qualifiedType="resqml20.*",
+            ),
+            dict(
+                qualifiedType="eml20.*",
+            ),
+            *additional_supported_data_objects,
+        ],
+        currentDateTime=datetime.datetime.now(datetime.timezone.utc).timestamp(),
+        earliestRetainedChangeTime=0,
+        endpointCapabilities=dict(
+            MaxWebSocketMessagePayloadSize=dict(
+                item=max_payload_size,
+            ),
+        ),
+    )
+
+    await ws.send(
+        serialize_message(
+            mh_record,
+            rs_record,
+            "Energistics.Etp.v12.Protocol.Core.RequestSession",
+        ),
+    )
+
+    # Note, OpenSession is a single message, but the
+    # handle_multipart_response-function works just as well for single
+    # messages.
+    return await handle_multipart_response(
+        ws, "Energistics.Etp.v12.Protocol.Core.OpenSession"
+    )
 
 
 async def close_session(ws, reason):
@@ -160,9 +239,7 @@ async def close_session(ws, reason):
         messageFlags=MHFlags.FIN.value,
     )
 
-    cs_record = dict(
-        reason=reason,
-    )
+    cs_record = dict(reason=reason)
 
     await ws.send(
         serialize_message(
@@ -185,7 +262,6 @@ async def handle_multipart_response(ws, schema_key):
         mh_record = fastavro.read.schemaless_reader(
             fo,
             etp_schemas["Energistics.Etp.v12.Datatypes.MessageHeader"],
-            return_record_name=True,
         )
 
         if mh_record["messageType"] == 1000:
@@ -194,9 +270,13 @@ async def handle_multipart_response(ws, schema_key):
                 fo,
                 etp_schemas["Energistics.Etp.v12.Protocol.Core.ProtocolException"],
             )
+            # TODO: Handle this better. We should not need to terminate the
+            # session and the program. Most exceptions are not fatal.
             # Output error object
             pprint.pprint(record)
+            # Close the session
             await close_session(ws, reason=f"Error from protocol '{schema_key}'")
+            # Exit with error
             sys.exit(1)
         else:
             record = fastavro.read.schemaless_reader(
@@ -222,11 +302,8 @@ async def get_dataspaces(ws, store_last_write_filter=None):
         messageId=await ClientMessageId.get_next_id(),
         messageFlags=MHFlags.FIN.value,  # Fin
     )
-    gd_record = dict(
-        storeLastWriteFilter=None,  # Include all dataspaces
-    )
+    gd_record = dict(storeLastWriteFilter=store_last_write_filter)
 
-    # The final response message should have the fin-bit set in the message header
     await ws.send(
         serialize_message(
             mh_record, gd_record, "Energistics.Etp.v12.Protocol.Dataspace.GetDataspaces"
@@ -239,12 +316,7 @@ async def get_dataspaces(ws, store_last_write_filter=None):
 
 
 async def put_dataspaces(ws, dataspaces):
-    uris = list(
-        map(lambda x: (x if "eml:///" in x else f"eml:///dataspace('{x}')"), dataspaces)
-    )
-    paths = list(
-        map(lambda x: re.search(r"eml:///dataspace\('(.+)'\)", x).group(1), uris)
-    )
+    uris = list(map(lambda dataspace: f"eml:///dataspace('{dataspace}')", dataspaces))
 
     mh_record = dict(
         protocol=24,  # Dataspace
@@ -260,14 +332,14 @@ async def put_dataspaces(ws, dataspaces):
                 uri,
                 dict(
                     uri=uri,
-                    path=path,
+                    path=dataspace,
                     # Here we create the dataspace for the first time, hence last write
                     # and created are the same
                     storeLastWrite=time,
                     storeCreated=time,
                 ),
             )
-            for uri, path in zip(uris, paths)
+            for uri, dataspace in zip(uris, dataspaces)
         )
     )
 
@@ -313,8 +385,7 @@ async def delete_dataspaces(ws, dataspaces):
 
 
 async def put_data_objects(ws, dataspace, data_object_types, uuids, xmls, titles=None):
-    # TODO: If 'data' is too large to fit in a single PutDataObjects-call, then
-    # we need to use chunks. Figure out how to do that.
+    # TODO: Use chunks if the data objects are too large for the websocket payload
 
     uris = [
         get_data_object_uri(dataspace, dot, _uuid)
@@ -377,9 +448,7 @@ async def get_resources(
     extra_context_info_args=dict(),
     extra_get_resources_args=dict(),
 ):
-    # TODO: Improve parsing
-    if not dataspace.startswith("eml:///"):
-        dataspace = f"eml:///dataspace('{dataspace}')"
+    uri = f"eml:///dataspace('{dataspace}')"
 
     # Get resources
     mh_record = dict(
@@ -393,7 +462,7 @@ async def get_resources(
         **dict(  # GetResources
             context={
                 **dict(  # ContextInfo
-                    uri=dataspace,
+                    uri=uri,
                     depth=2,
                     navigableEdges="Primary",
                 ),
@@ -401,7 +470,7 @@ async def get_resources(
             },
             scope="targets",
             storeLastWriteFilter=None,
-            activeStatusFilter=None,  # perhaps active?
+            activeStatusFilter=None,
         ),
         **extra_get_resources_args,
     }
@@ -469,8 +538,8 @@ async def get_data_array_metadata(ws, epc_uri, path_in_resource):
     )
     gdam_record = dict(
         dataArrays={
-            # XXX: Note that we use the pathInResource (pathInHdfFile) from
-            # the Grid2dRepresentation, but the uri is for
+            # Note that we use the pathInResource (pathInHdfFile) from the
+            # Grid2dRepresentation, but the uri is for
             # EpcExternalPartReference!
             key: dict(
                 uri=epc_uri,
@@ -566,8 +635,8 @@ async def get_data_arrays(ws, epc_uri, path_in_resources):
     )
     gda_record = dict(
         dataArrays={
-            # XXX: Note that we use the pathInResource (pathInHdfFile) from
-            # the Grid2dRepresentation, but the uri is for
+            # Note that we use the pathInResource (pathInHdfFile) from the
+            # Grid2dRepresentation, but the uri is for
             # EpcExternalPartReference!
             key: dict(
                 uri=epc_uri,
@@ -634,102 +703,21 @@ async def start_and_stop(
     url="ws://localhost:9002", headers={}, dataspace="demo/rand-cli", verify=True
 ):
     print(f"Talking to: {url}")
+    # Note that websockets compress the messages by default, and further
+    # compression with gzip might not be super effective.  However, this could
+    # be useful to test.
     async with websockets.connect(
         url,
         extra_headers=headers,
         subprotocols=["etp12.energistics.org"],
     ) as ws:
-        # TODO: Figure out how to set websocket max sizes
-        # Request session, i.e., start the thingy
-        mh_record = dict(
-            protocol=0,  # Core protocol
-            messageType=1,  # RequestSession
-            correlationId=0,  # Ignored for RequestSession
-            messageId=await ClientMessageId.get_next_id(),
-            messageFlags=MHFlags.FIN.value,  # FIN-bit
-        )
-
-        rs_record = dict(
-            applicationName="somecli",
-            applicationVersion="0.0.0",
-            clientInstanceId=uuid.uuid4().bytes,
-            requestedProtocols=[  # [SupportedProtocol]
-                dict(
-                    protocol=3,  # Discovery
-                    protocolVersion=dict(
-                        major=1,
-                        minor=2,
-                    ),
-                    role="store",
-                ),
-                dict(
-                    protocol=4,  # Store
-                    protocolVersion=dict(
-                        major=1,
-                        minor=2,
-                    ),
-                    role="store",
-                ),
-                dict(
-                    protocol=9,  # DataArray
-                    protocolVersion=dict(
-                        major=1,
-                        minor=2,
-                    ),
-                    role="store",
-                ),
-                dict(
-                    protocol=24,  # Dataspace
-                    protocolVersion=dict(
-                        major=1,
-                        minor=2,
-                    ),
-                    role="store",
-                ),
-            ],
-            supportedDataObjects=[
-                dict(  # SupportedDataObject
-                    qualifiedType="resqml20.*",
-                ),
-                dict(
-                    qualifiedType="eml20.*",
-                ),
-            ],
-            currentDateTime=datetime.datetime.now(datetime.timezone.utc).timestamp(),
-            earliestRetainedChangeTime=0,
-            serverAuthorizationRequired=False,
-        )
-
-        fo = io.BytesIO()
-        # Write the message header
-        fastavro.write.schemaless_writer(
-            fo, etp_schemas["Energistics.Etp.v12.Datatypes.MessageHeader"], mh_record
-        )
-        # Write the request session body
-        fastavro.write.schemaless_writer(
-            fo,
-            etp_schemas["Energistics.Etp.v12.Protocol.Core.RequestSession"],
-            rs_record,
-        )
-
-        await ws.send(fo.getvalue())
-
-        # Read the response
-        # TODO: Handle possible errors
-        resp = await ws.recv()
-
-        fo = io.BytesIO(resp)
-        record = fastavro.read.schemaless_reader(
-            fo,
-            etp_schemas["Energistics.Etp.v12.Datatypes.MessageHeader"],
-            return_record_name=True,
-        )
-        pprint.pprint(record)
-        record = fastavro.read.schemaless_reader(
-            fo,
-            etp_schemas["Energistics.Etp.v12.Protocol.Core.OpenSession"],
-            return_record_name=True,
-        )
+        records = await request_session(ws)
+        # Note, this size is the minimum of the suggested size sent in the
+        # "RequestSession" and the returned value from the server in
+        # "OpenSession".
+        max_payload_size = records[0]["endpointCapabilities"][
+            "MaxWebSocketMessagePayloadSize"
+        ]["item"]
 
         records = await get_dataspaces(ws, store_last_write_filter=None)
 
@@ -769,6 +757,9 @@ async def start_and_stop(
             # deleted after the context manager finishes.
 
             # Create random test data
+            z_values = np.random.random((3, 4))
+
+            # Set up model for test data
             model = resqpy.model.new_model(
                 os.path.join(tmpdirname, "tmp.epc"), quiet=False
             )
@@ -776,7 +767,9 @@ async def start_and_stop(
             crs = resqpy.crs.Crs(model, title="random-test-crs")
             crs.create_xml()
 
-            z_values = np.random.random((3, 4))
+            # TODO: Test with large array below.
+            # This requires subarray-handling
+            # z_values = np.random.random((10000, 10001))
 
             mesh = resqpy.surface.Mesh(
                 model,
@@ -795,6 +788,7 @@ async def start_and_stop(
             mesh.write_hdf5()
             model.store_epc()
 
+            # Read epc-file from disk
             dat = {}
             with zipfile.ZipFile(model.epc_file, "r") as zfile:
                 for zinfo in filter(
@@ -820,8 +814,8 @@ async def start_and_stop(
 
             data_object_types.append(dot)
             uuids.append(_uuid)
-            # XXX: We have to use the xml from the etp-files, not directly from
-            # resqpy!!!
+            # Note that we here use the xmls from the etp-file instead of the
+            # ones from resqpy model.
             xmls.append(dat[key])
 
         records = await put_data_objects(
@@ -830,6 +824,7 @@ async def start_and_stop(
             data_object_types,
             uuids,
             xmls,
+            # Titles are not unique
             titles=titles if len(titles) == len(set(titles)) else None,
         )
 
@@ -861,14 +856,19 @@ async def start_and_stop(
                 assert uri == items["resource"]["uri"]
                 if "EpcExternalPart" in uri:
                     epc_uri = uri
-                root = ET.fromstring(items["data"])
-                res = root.xpath("//*[starts-with(local-name(), 'PathInHdfFile')]")
+
+                res = get_path_in_resource(items["data"])
                 if len(res) == 1:
                     pir[uri] = res[0].text
 
         assert epc_uri != ""
+
+        # The metadata can be used to check the size of the array before
+        # requesting the data. We should then optionally request the array in
+        # several subarrays.
         records = await get_data_array_metadata(ws, epc_uri, pir)
 
+        # Request the full array.
         records = await get_data_arrays(ws, epc_uri, pir)
 
         assert len(records) == 1
@@ -878,12 +878,15 @@ async def start_and_stop(
             for key in sorted(pir)
         }
 
+        # Check that the returned data is the same as the data we sent
         assert data[sorted(data)[0]].shape == z_values.shape
         np.testing.assert_allclose(
             data[sorted(data)[0]],
             z_values,
         )
 
+        # Test the subarray capabilities. We request the full data array via
+        # three subarray blocks, and reconstruct the full array in the end.
         records = await get_data_subarray(
             ws,
             epc_uri,
@@ -932,7 +935,8 @@ async def start_and_stop(
         )
         np.testing.assert_allclose(list(data.values())[0], subdata_rec)
 
-        # Note, accessing too many columns crashes the server
+        # XXX: Accessing too many columns crashes the server. Accessing too
+        # many rows only returns an exception.
         # records = await get_data_subarray(
         #     ws,
         #     epc_uri,
@@ -945,10 +949,14 @@ async def start_and_stop(
         await close_session(ws, "We are done 💅")
 
 
-# TODO: Populate localhost with data
+# Run the round on localhost. This requires that the etp-server is running
+# locally.
 asyncio.run(start_and_stop())
 
 
+# Test on the published etp-server. This requires a token for Azure, and access
+# to the rddms-group. If the server crashes, please inform the rddms-group to
+# have it restarted.
 # asyncio.run(
 #     start_and_stop(
 #         url="wss://interop-rddms.azure-api.net",
