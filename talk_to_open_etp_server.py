@@ -710,8 +710,13 @@ async def start_and_stop(
         url,
         extra_headers=headers,
         subprotocols=["etp12.energistics.org"],
+        # This max_size parameter sets the maximum websocket frame size for
+        # _incoming messages_.
+        max_size=int(1.6e7),
     ) as ws:
-        records = await request_session(ws)
+        # XXX: Passing in a max_payload_size < 1000 (or thereabouts) will crash
+        # the server!
+        records = await request_session(ws, max_payload_size=int(1.6e7))
         # Note, this size is the minimum of the suggested size sent in the
         # "RequestSession" and the returned value from the server in
         # "OpenSession".
