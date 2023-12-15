@@ -764,6 +764,16 @@ async def start_and_stop(
             # Create random test data
             z_values = np.random.random((3, 4))
 
+            # TODO: Test with large array.
+            # This requires subarray-handling.
+            # The array below can not be sent or received in a single message.
+            # z_values = np.random.random((2000, 2000))
+
+            # When setting maximal websocket payload size (for the server, and
+            # the client), the array below is the largest we can send and
+            # recieve in a single message.
+            # z_values = np.random.random((1, int(1.6e7 / 4) - 343))
+
             # Set up model for test data
             model = resqpy.model.new_model(
                 os.path.join(tmpdirname, "tmp.epc"), quiet=False
@@ -771,10 +781,6 @@ async def start_and_stop(
             # This needs to be done in order to get a uuid
             crs = resqpy.crs.Crs(model, title="random-test-crs")
             crs.create_xml()
-
-            # TODO: Test with large array below.
-            # This requires subarray-handling
-            # z_values = np.random.random((10000, 10001))
 
             mesh = resqpy.surface.Mesh(
                 model,
