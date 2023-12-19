@@ -6,7 +6,7 @@ Set up the `open-etp-server` ([https://community.opengroup.org/osdu/platform/dom
 ```
 docker compose up --detach
 ```
-Next, install Python requirements in a virtual environment with:
+Next, install Python (tested with Python 3.11.6) requirements in a virtual environment with:
 ```
 python -m venv venv
 source venv/bin/activate
