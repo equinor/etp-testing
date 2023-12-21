@@ -836,6 +836,11 @@ async def start_and_stop(
 
         # XXX: Accessing too many columns crashes the server. Accessing too
         # many rows only returns an exception. This call crashes the server.
+        # See: https://community.opengroup.org/osdu/platform/domain-data-mgmt-services/reservoir/open-etp-server/-/issues/104
+        # for the issue.
+        # This has now been resolved, and using a version of the
+        # open-etp-server published after December 20th 2023 will not have this
+        # bug.
         records = await get_data_subarray(
             ws,
             epc_uri,
