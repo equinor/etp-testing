@@ -826,7 +826,7 @@ async def start_and_stop(
             data_object_types.append(dot)
             uuids.append(_uuid)
             # Note that we here use the xmls from the etp-file instead of the
-            # ones from resqpy model.
+            # ones from the resqpy model.
             xmls.append(dat[key])
 
         records = await put_data_objects(
