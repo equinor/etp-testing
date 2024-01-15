@@ -960,17 +960,17 @@ async def start_and_stop(
         await close_session(ws, "We are done 💅")
 
 
-# Run the round on localhost. This requires that the etp-server is running
-# locally.
-asyncio.run(start_and_stop())
+if __name__ == "__main__":
+    # Run the round on localhost. This requires that the etp-server is running
+    # locally.
+    asyncio.run(start_and_stop())
 
-
-# Test on the published etp-server. This requires a token for Azure, and access
-# to the rddms-group. If the server crashes, please inform the rddms-group to
-# have it restarted.
-# asyncio.run(
-#     start_and_stop(
-#         url="wss://interop-rddms.azure-api.net",
-#         headers={"Authorization": "Bearer " + get_token()},
-#     ),
-# )
+    # Test on the published etp-server. This requires a token for Azure, and access
+    # to the rddms-group. If the server crashes, please inform the rddms-group to
+    # have it restarted.
+    # asyncio.run(
+    #     start_and_stop(
+    #         url="wss://interop-rddms.azure-api.net",
+    #         headers={"Authorization": "Bearer " + get_token()},
+    #     ),
+    # )
