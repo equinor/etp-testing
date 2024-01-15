@@ -1,0 +1,9 @@
+<ns0:EpcExternalPartReference xmlns:ns0="http://www.energistics.org/energyml/data/commonv2" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" schemaVersion="2.0" uuid="f48d2cdc-ab9c-11ee-8731-215ba03bbe47" xsi:type="{http://www.energistics.org/energyml/data/commonv2}obj_EpcExternalPartReference">
+  <ns0:Citation xsi:type="{http://www.energistics.org/energyml/data/commonv2}Citation">
+    <ns0:Title xsi:type="{http://www.energistics.org/energyml/data/commonv2}DescriptionString">Hdf Proxy</ns0:Title>
+    <ns0:Originator xsi:type="{http://www.energistics.org/energyml/data/commonv2}NameString">oyvind</ns0:Originator>
+    <ns0:Creation xsi:type="{http://www.w3.org/2001/XMLSchema}dateTime">2024-01-05T08:35:10Z</ns0:Creation>
+    <ns0:Format xsi:type="{http://www.energistics.org/energyml/data/commonv2}DescriptionString">bp:resqpy:v4.12.3</ns0:Format>
+  </ns0:Citation>
+  <ns0:MimeType xsi:type="{http://www.w3.org/2001/XMLSchema}string">application/x-hdf5</ns0:MimeType>
+</ns0:EpcExternalPartReference>

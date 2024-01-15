@@ -1,0 +1,22 @@
+<resqml2:LocalDepth3dCrs xmlns:resqml2="http://www.energistics.org/energyml/data/resqmlv2" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" schemaVersion="2.0" uuid="f48d2cdd-ab9c-11ee-8731-215ba03bbe47" xsi:type="resqml2:obj_LocalDepth3dCrs">
+  <eml:Citation xmlns:eml="http://www.energistics.org/energyml/data/commonv2" xsi:type="eml:Citation">
+    <eml:Title xsi:type="eml:DescriptionString">random-test-crs</eml:Title>
+    <eml:Originator xsi:type="eml:NameString">oyvind</eml:Originator>
+    <eml:Creation xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:dateTime">2024-01-05T08:35:10Z</eml:Creation>
+    <eml:Format xsi:type="eml:DescriptionString">bp:resqpy:v4.12.3</eml:Format>
+  </eml:Citation>
+  <resqml2:XOffset xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:double">0.000</resqml2:XOffset>
+  <resqml2:YOffset xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:double">0.000</resqml2:YOffset>
+  <resqml2:ZOffset xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:double">0.0000</resqml2:ZOffset>
+  <resqml2:ArealRotation xmlns:eml="http://www.energistics.org/energyml/data/commonv2" uom="dega" xsi:type="eml:PlaneAngleMeasure">0.000000</resqml2:ArealRotation>
+  <resqml2:ProjectedAxisOrder xmlns:eml="http://www.energistics.org/energyml/data/commonv2" xsi:type="eml:AxisOrder2d">easting northing</resqml2:ProjectedAxisOrder>
+  <resqml2:ProjectedUom xmlns:eml="http://www.energistics.org/energyml/data/commonv2" xsi:type="eml:LengthUom">m</resqml2:ProjectedUom>
+  <resqml2:VerticalUom xmlns:eml="http://www.energistics.org/energyml/data/commonv2" xsi:type="eml:LengthUom">m</resqml2:VerticalUom>
+  <resqml2:ZIncreasingDownward xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:boolean">true</resqml2:ZIncreasingDownward>
+  <resqml2:ProjectedCrs xmlns:eml="http://www.energistics.org/energyml/data/commonv2" xsi:type="eml:ProjectedUnknownCrs">
+    <eml:Unknown xsi:type="eml:DescriptionString">Unknown</eml:Unknown>
+  </resqml2:ProjectedCrs>
+  <resqml2:VerticalCrs xmlns:eml="http://www.energistics.org/energyml/data/commonv2" xsi:type="eml:VerticalUnknownCrs">
+    <eml:Unknown xsi:type="eml:DescriptionString">Unknown</eml:Unknown>
+  </resqml2:VerticalCrs>
+</resqml2:LocalDepth3dCrs>

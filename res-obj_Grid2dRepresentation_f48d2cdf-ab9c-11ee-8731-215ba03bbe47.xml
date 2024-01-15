@@ -1,0 +1,62 @@
+<ns0:Grid2dRepresentation xmlns:ns0="http://www.energistics.org/energyml/data/resqmlv2" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" schemaVersion="2.0" uuid="f48d2cdf-ab9c-11ee-8731-215ba03bbe47" xsi:type="{http://www.energistics.org/energyml/data/resqmlv2}obj_Grid2dRepresentation">
+  <ns0:Citation xmlns:ns0="http://www.energistics.org/energyml/data/commonv2" xsi:type="{http://www.energistics.org/energyml/data/commonv2}Citation">
+    <ns0:Title xsi:type="{http://www.energistics.org/energyml/data/commonv2}DescriptionString">random-test-data</ns0:Title>
+    <ns0:Originator xsi:type="{http://www.energistics.org/energyml/data/commonv2}NameString">oyvind</ns0:Originator>
+    <ns0:Creation xsi:type="{http://www.w3.org/2001/XMLSchema}dateTime">2024-01-05T08:35:10Z</ns0:Creation>
+    <ns0:Format xsi:type="{http://www.energistics.org/energyml/data/commonv2}DescriptionString">bp:resqpy:v4.12.3</ns0:Format>
+  </ns0:Citation>
+  <ns0:SurfaceRole xsi:type="{http://www.energistics.org/energyml/data/resqmlv2}SurfaceRole">map</ns0:SurfaceRole>
+  <ns0:Grid2dPatch xsi:type="{http://www.energistics.org/energyml/data/resqmlv2}Grid2dPatch">
+    <ns0:PatchIndex xsi:type="{http://www.w3.org/2001/XMLSchema}nonNegativeInteger">0</ns0:PatchIndex>
+    <ns0:FastestAxisCount xsi:type="{http://www.w3.org/2001/XMLSchema}positiveInteger">4</ns0:FastestAxisCount>
+    <ns0:SlowestAxisCount xsi:type="{http://www.w3.org/2001/XMLSchema}positiveInteger">3</ns0:SlowestAxisCount>
+    <ns0:Geometry xsi:type="{http://www.energistics.org/energyml/data/resqmlv2}PointGeometry">
+      <ns0:LocalCrs xsi:type="{http://www.energistics.org/energyml/data/commonv2}DataObjectReference">
+        <ns1:ContentType xmlns:ns1="http://www.energistics.org/energyml/data/commonv2" xsi:type="{http://www.w3.org/2001/XMLSchema}string">application/x-resqml+xml;version=2.0;type=obj_LocalDepth3dCrs</ns1:ContentType>
+        <ns2:Title xmlns:ns2="http://www.energistics.org/energyml/data/commonv2" xsi:type="{http://www.energistics.org/energyml/data/commonv2}DescriptionString">random-test-crs</ns2:Title>
+        <ns3:UUID xmlns:ns3="http://www.energistics.org/energyml/data/commonv2" xsi:type="{http://www.energistics.org/energyml/data/commonv2}UuidString">f48d2cdd-ab9c-11ee-8731-215ba03bbe47</ns3:UUID>
+      </ns0:LocalCrs>
+      <ns0:Points xsi:type="{http://www.energistics.org/energyml/data/resqmlv2}Point3dZValueArray">
+        <ns0:SupportingGeometry xsi:type="{http://www.energistics.org/energyml/data/resqmlv2}Point3dLatticeArray">
+          <ns0:Origin xsi:type="{http://www.energistics.org/energyml/data/resqmlv2}Point3d">
+            <ns0:Coordinate1 xsi:type="{http://www.w3.org/2001/XMLSchema}double">0.3706444000082135</ns0:Coordinate1>
+            <ns0:Coordinate2 xsi:type="{http://www.w3.org/2001/XMLSchema}double">0.6260946069435294</ns0:Coordinate2>
+            <ns0:Coordinate3 xsi:type="{http://www.w3.org/2001/XMLSchema}double">0.0</ns0:Coordinate3>
+          </ns0:Origin>
+          <ns0:Offset xsi:type="{http://www.energistics.org/energyml/data/resqmlv2}Point3dOffset">
+            <ns0:Offset xsi:type="{http://www.energistics.org/energyml/data/resqmlv2}Point3d">
+              <ns0:Coordinate1 xsi:type="{http://www.w3.org/2001/XMLSchema}double">0.0</ns0:Coordinate1>
+              <ns0:Coordinate2 xsi:type="{http://www.w3.org/2001/XMLSchema}double">1.0</ns0:Coordinate2>
+              <ns0:Coordinate3 xsi:type="{http://www.w3.org/2001/XMLSchema}double">0.0</ns0:Coordinate3>
+            </ns0:Offset>
+            <ns0:Spacing xsi:type="{http://www.energistics.org/energyml/data/resqmlv2}DoubleConstantArray">
+              <ns0:Value xsi:type="{http://www.w3.org/2001/XMLSchema}double">0.5</ns0:Value>
+              <ns0:Count xsi:type="{http://www.w3.org/2001/XMLSchema}positiveInteger">2</ns0:Count>
+            </ns0:Spacing>
+          </ns0:Offset>
+          <ns0:Offset xsi:type="{http://www.energistics.org/energyml/data/resqmlv2}Point3dOffset">
+            <ns0:Offset xsi:type="{http://www.energistics.org/energyml/data/resqmlv2}Point3d">
+              <ns0:Coordinate1 xsi:type="{http://www.w3.org/2001/XMLSchema}double">1.0</ns0:Coordinate1>
+              <ns0:Coordinate2 xsi:type="{http://www.w3.org/2001/XMLSchema}double">0.0</ns0:Coordinate2>
+              <ns0:Coordinate3 xsi:type="{http://www.w3.org/2001/XMLSchema}double">0.0</ns0:Coordinate3>
+            </ns0:Offset>
+            <ns0:Spacing xsi:type="{http://www.energistics.org/energyml/data/resqmlv2}DoubleConstantArray">
+              <ns0:Value xsi:type="{http://www.w3.org/2001/XMLSchema}double">1.0</ns0:Value>
+              <ns0:Count xsi:type="{http://www.w3.org/2001/XMLSchema}positiveInteger">3</ns0:Count>
+            </ns0:Spacing>
+          </ns0:Offset>
+        </ns0:SupportingGeometry>
+        <ns0:ZValues xsi:type="{http://www.energistics.org/energyml/data/resqmlv2}DoubleHdf5Array">
+          <ns0:Values xsi:type="{http://www.energistics.org/energyml/data/commonv2}Hdf5Dataset">
+            <ns0:PathInHdfFile xmlns:ns0="http://www.energistics.org/energyml/data/commonv2" xsi:type="{http://www.w3.org/2001/XMLSchema}string">/RESQML/f48d2cdf-ab9c-11ee-8731-215ba03bbe47/zvalues</ns0:PathInHdfFile>
+            <ns0:HdfProxy xmlns:ns0="http://www.energistics.org/energyml/data/commonv2" xsi:type="{http://www.energistics.org/energyml/data/commonv2}DataObjectReference">
+              <ns0:ContentType xsi:type="{http://www.w3.org/2001/XMLSchema}string">application/x-eml+xml;version=2.0;type=obj_EpcExternalPartReference</ns0:ContentType>
+              <ns0:Title xsi:type="{http://www.energistics.org/energyml/data/commonv2}DescriptionString">Hdf Proxy</ns0:Title>
+              <ns0:UUID xsi:type="{http://www.energistics.org/energyml/data/commonv2}UuidString">f48d2cdc-ab9c-11ee-8731-215ba03bbe47</ns0:UUID>
+            </ns0:HdfProxy>
+          </ns0:Values>
+        </ns0:ZValues>
+      </ns0:Points>
+    </ns0:Geometry>
+  </ns0:Grid2dPatch>
+</ns0:Grid2dRepresentation>

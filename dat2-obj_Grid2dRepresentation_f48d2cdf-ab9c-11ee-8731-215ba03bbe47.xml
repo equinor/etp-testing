@@ -1,0 +1,62 @@
+<resqml2:Grid2dRepresentation xmlns:resqml2="http://www.energistics.org/energyml/data/resqmlv2" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" schemaVersion="2.0" uuid="f48d2cdf-ab9c-11ee-8731-215ba03bbe47" xsi:type="resqml2:obj_Grid2dRepresentation">
+  <eml:Citation xmlns:eml="http://www.energistics.org/energyml/data/commonv2" xsi:type="eml:Citation">
+    <eml:Title xsi:type="eml:DescriptionString">random-test-data</eml:Title>
+    <eml:Originator xsi:type="eml:NameString">oyvind</eml:Originator>
+    <eml:Creation xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:dateTime">2024-01-05T08:35:10Z</eml:Creation>
+    <eml:Format xsi:type="eml:DescriptionString">bp:resqpy:v4.12.3</eml:Format>
+  </eml:Citation>
+  <resqml2:SurfaceRole xsi:type="resqml2:SurfaceRole">map</resqml2:SurfaceRole>
+  <resqml2:Grid2dPatch xsi:type="resqml2:Grid2dPatch">
+    <resqml2:PatchIndex xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:nonNegativeInteger">0</resqml2:PatchIndex>
+    <resqml2:FastestAxisCount xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:positiveInteger">4</resqml2:FastestAxisCount>
+    <resqml2:SlowestAxisCount xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:positiveInteger">3</resqml2:SlowestAxisCount>
+    <resqml2:Geometry xsi:type="resqml2:PointGeometry">
+      <resqml2:LocalCrs xmlns:eml="http://www.energistics.org/energyml/data/commonv2" xsi:type="eml:DataObjectReference">
+        <eml:ContentType xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:string">application/x-resqml+xml;version=2.0;type=obj_LocalDepth3dCrs</eml:ContentType>
+        <eml:Title xsi:type="eml:DescriptionString">random-test-crs</eml:Title>
+        <eml:UUID xsi:type="eml:UuidString">f48d2cdd-ab9c-11ee-8731-215ba03bbe47</eml:UUID>
+      </resqml2:LocalCrs>
+      <resqml2:Points xsi:type="resqml2:Point3dZValueArray">
+        <resqml2:SupportingGeometry xsi:type="resqml2:Point3dLatticeArray">
+          <resqml2:Origin xsi:type="resqml2:Point3d">
+            <resqml2:Coordinate1 xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:double">0.3706444000082135</resqml2:Coordinate1>
+            <resqml2:Coordinate2 xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:double">0.6260946069435294</resqml2:Coordinate2>
+            <resqml2:Coordinate3 xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:double">0.0</resqml2:Coordinate3>
+          </resqml2:Origin>
+          <resqml2:Offset xsi:type="resqml2:Point3dOffset">
+            <resqml2:Offset xsi:type="resqml2:Point3d">
+              <resqml2:Coordinate1 xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:double">0.0</resqml2:Coordinate1>
+              <resqml2:Coordinate2 xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:double">1.0</resqml2:Coordinate2>
+              <resqml2:Coordinate3 xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:double">0.0</resqml2:Coordinate3>
+            </resqml2:Offset>
+            <resqml2:Spacing xsi:type="resqml2:DoubleConstantArray">
+              <resqml2:Value xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:double">0.5</resqml2:Value>
+              <resqml2:Count xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:positiveInteger">2</resqml2:Count>
+            </resqml2:Spacing>
+          </resqml2:Offset>
+          <resqml2:Offset xsi:type="resqml2:Point3dOffset">
+            <resqml2:Offset xsi:type="resqml2:Point3d">
+              <resqml2:Coordinate1 xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:double">1.0</resqml2:Coordinate1>
+              <resqml2:Coordinate2 xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:double">0.0</resqml2:Coordinate2>
+              <resqml2:Coordinate3 xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:double">0.0</resqml2:Coordinate3>
+            </resqml2:Offset>
+            <resqml2:Spacing xsi:type="resqml2:DoubleConstantArray">
+              <resqml2:Value xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:double">1.0</resqml2:Value>
+              <resqml2:Count xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:positiveInteger">3</resqml2:Count>
+            </resqml2:Spacing>
+          </resqml2:Offset>
+        </resqml2:SupportingGeometry>
+        <resqml2:ZValues xsi:type="resqml2:DoubleHdf5Array">
+          <resqml2:Values xmlns:eml="http://www.energistics.org/energyml/data/commonv2" xsi:type="eml:Hdf5Dataset">
+            <eml:PathInHdfFile xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:string">/RESQML/f48d2cdf-ab9c-11ee-8731-215ba03bbe47/zvalues</eml:PathInHdfFile>
+            <eml:HdfProxy xsi:type="eml:DataObjectReference">
+              <eml:ContentType xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:type="xsd:string">application/x-eml+xml;version=2.0;type=obj_EpcExternalPartReference</eml:ContentType>
+              <eml:Title xsi:type="eml:DescriptionString">Hdf Proxy</eml:Title>
+              <eml:UUID xsi:type="eml:UuidString">f48d2cdc-ab9c-11ee-8731-215ba03bbe47</eml:UUID>
+            </eml:HdfProxy>
+          </resqml2:Values>
+        </resqml2:ZValues>
+      </resqml2:Points>
+    </resqml2:Geometry>
+  </resqml2:Grid2dPatch>
+</resqml2:Grid2dRepresentation>

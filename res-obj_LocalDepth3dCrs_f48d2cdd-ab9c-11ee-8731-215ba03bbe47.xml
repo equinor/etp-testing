@@ -1,0 +1,22 @@
+<ns0:LocalDepth3dCrs xmlns:ns0="http://www.energistics.org/energyml/data/resqmlv2" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" schemaVersion="2.0" uuid="f48d2cdd-ab9c-11ee-8731-215ba03bbe47" xsi:type="{http://www.energistics.org/energyml/data/resqmlv2}obj_LocalDepth3dCrs">
+  <ns0:Citation xmlns:ns0="http://www.energistics.org/energyml/data/commonv2" xsi:type="{http://www.energistics.org/energyml/data/commonv2}Citation">
+    <ns0:Title xsi:type="{http://www.energistics.org/energyml/data/commonv2}DescriptionString">random-test-crs</ns0:Title>
+    <ns0:Originator xsi:type="{http://www.energistics.org/energyml/data/commonv2}NameString">oyvind</ns0:Originator>
+    <ns0:Creation xsi:type="{http://www.w3.org/2001/XMLSchema}dateTime">2024-01-05T08:35:10Z</ns0:Creation>
+    <ns0:Format xsi:type="{http://www.energistics.org/energyml/data/commonv2}DescriptionString">bp:resqpy:v4.12.3</ns0:Format>
+  </ns0:Citation>
+  <ns0:XOffset xsi:type="{http://www.w3.org/2001/XMLSchema}double">0.000</ns0:XOffset>
+  <ns0:YOffset xsi:type="{http://www.w3.org/2001/XMLSchema}double">0.000</ns0:YOffset>
+  <ns0:ZOffset xsi:type="{http://www.w3.org/2001/XMLSchema}double">0.0000</ns0:ZOffset>
+  <ns0:ArealRotation uom="dega" xsi:type="{http://www.energistics.org/energyml/data/commonv2}PlaneAngleMeasure">0.000000</ns0:ArealRotation>
+  <ns0:ProjectedAxisOrder xsi:type="{http://www.energistics.org/energyml/data/commonv2}AxisOrder2d">easting northing</ns0:ProjectedAxisOrder>
+  <ns0:ProjectedUom xsi:type="{http://www.energistics.org/energyml/data/commonv2}LengthUom">m</ns0:ProjectedUom>
+  <ns0:VerticalUom xsi:type="{http://www.energistics.org/energyml/data/commonv2}LengthUom">m</ns0:VerticalUom>
+  <ns0:ZIncreasingDownward xsi:type="{http://www.w3.org/2001/XMLSchema}boolean">true</ns0:ZIncreasingDownward>
+  <ns0:ProjectedCrs xsi:type="{http://www.energistics.org/energyml/data/commonv2}ProjectedUnknownCrs">
+    <ns0:Unknown xmlns:ns0="http://www.energistics.org/energyml/data/commonv2" xsi:type="{http://www.energistics.org/energyml/data/commonv2}DescriptionString">Unknown</ns0:Unknown>
+  </ns0:ProjectedCrs>
+  <ns0:VerticalCrs xsi:type="{http://www.energistics.org/energyml/data/commonv2}VerticalUnknownCrs">
+    <ns0:Unknown xmlns:ns0="http://www.energistics.org/energyml/data/commonv2" xsi:type="{http://www.energistics.org/energyml/data/commonv2}DescriptionString">Unknown</ns0:Unknown>
+  </ns0:VerticalCrs>
+</ns0:LocalDepth3dCrs>
