@@ -23,6 +23,14 @@ import resqpy
 import resqpy.model
 
 
+from xsdata.formats.dataclass.context import XmlContext
+from xsdata.formats.dataclass.parsers import XmlParser
+from xsdata.formats.dataclass.serializers import XmlSerializer
+from xsdata.formats.dataclass.serializers.config import SerializerConfig
+
+import resqml_objects
+
+
 def get_token(token_filename: str = ".token") -> str:
     with open(".token", "r") as f:
         f_r = json.load(f)
@@ -808,6 +816,39 @@ async def start_and_stop(
                     with zfile.open(zinfo.filename) as f:
                         dat[zinfo.filename] = f.read()
 
+        context = XmlContext()
+        parser = XmlParser(context=context)
+        config = SerializerConfig(pretty_print=False)
+        serializer = XmlSerializer(config=config)
+
+        epc_key = next(
+            filter(lambda x: "EpcExternalPart" in x, model.parts_forest.keys())
+        )
+        gri_key = next(
+            filter(lambda x: "Grid2dRepresentation" in x, model.parts_forest.keys())
+        )
+        crs_key = next(
+            filter(lambda x: "LocalDepth3dCrs" in x, model.parts_forest.keys())
+        )
+
+        epc = parser.from_bytes(
+            ET.tostring(model.parts_forest[epc_key][2]),
+            resqml_objects.ObjEpcExternalPartReference,
+        )
+        crs = parser.from_bytes(
+            ET.tostring(model.parts_forest[crs_key][2]),
+            resqml_objects.ObjLocalDepth3DCrs,
+        )
+        gri = parser.from_bytes(
+            ET.tostring(model.parts_forest[gri_key][2]),
+            resqml_objects.ObjGrid2DRepresentation,
+        )
+        dat2 = {
+            epc_key: str.encode(serializer.render(epc)),
+            crs_key: str.encode(serializer.render(crs)),
+            gri_key: str.encode(serializer.render(gri)),
+        }
+
         data_object_types = []
         uuids = []
         xmls = []
@@ -827,14 +868,42 @@ async def start_and_stop(
             uuids.append(_uuid)
             # Note that we here use the xmls from the etp-file instead of the
             # ones from the resqpy model.
-            xmls.append(dat[key])
+            # xmls.append(dat[key])
+            xmls.append(dat2[key])
 
         records = await put_data_objects(
             ws,
             dataspace,
-            data_object_types,
-            uuids,
-            xmls,
+            [data_object_types[0]],
+            [uuids[0]],
+            [xmls[0]],
+            # Titles are not unique
+            titles=titles if len(titles) == len(set(titles)) else None,
+        )
+
+        records = await put_data_objects(
+            ws,
+            dataspace,
+            [data_object_types[1]],
+            [uuids[1]],
+            [xmls[1]],
+            # Titles are not unique
+            titles=titles if len(titles) == len(set(titles)) else None,
+        )
+
+        xml = ET.fromstring(xmls[1])
+        ET.indent(xml)
+        print(ET.tostring(xml, encoding=str))
+
+        xml = ET.fromstring(xmls[2])
+        ET.indent(xml)
+        print(ET.tostring(xml, encoding=str))
+        records = await put_data_objects(
+            ws,
+            dataspace,
+            [data_object_types[2]],
+            [uuids[2]],
+            [xmls[2]],
             # Titles are not unique
             titles=titles if len(titles) == len(set(titles)) else None,
         )
