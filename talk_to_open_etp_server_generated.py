@@ -23,6 +23,7 @@ import resqpy
 import resqpy.model
 
 
+from xsdata.models.datatype import XmlDateTime
 from xsdata.formats.dataclass.context import XmlContext
 from xsdata.formats.dataclass.parsers import XmlParser
 from xsdata.formats.dataclass.serializers import XmlSerializer
@@ -762,198 +763,182 @@ async def start_and_stop(
             )
         # Here 'dataspace' exists
 
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            # Note, resqpy does not seem to construct the correct xml-objects
-            # before they are written to disk. As such, we have to write to
-            # disk, then read in again to get the correct values. Here we do
-            # that using a temporary directory to ensure that data on disk is
-            # deleted after the context manager finishes.
+        common_citation_fields = dict(
+            creation=XmlDateTime.from_string(
+                datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S%z")
+            ),
+            originator="etp-testing",
+            format="equinor:etp-testing",
+        )
+        schema_version = "2.0"
 
-            # Create random test data
-            z_values = np.random.random((3, 4))
+        epc = resqml_objects.EpcExternalPartReference(
+            citation=resqml_objects.Citation(
+                title="Hdf Proxy",
+                **common_citation_fields,
+            ),
+            schema_version=schema_version,
+            uuid=str(uuid.uuid4()),
+            mime_type="application/x-hdf5",
+        )
 
-            # TODO: Test with large array.
-            # This requires subarray-handling.
-            # The array below can not be sent or received in a single message.
-            # z_values = np.random.random((2000, 2000))
+        crs = resqml_objects.LocalDepth3DCrs(
+            citation=resqml_objects.Citation(
+                title="Random CRS",
+                **common_citation_fields,
+            ),
+            schema_version=schema_version,
+            uuid=str(uuid.uuid4()),
+            xoffset=0.0,
+            yoffset=0.0,
+            zoffset=0.0,
+            areal_rotation=resqml_objects.PlaneAngleMeasure(
+                value=0.0,
+                uom=resqml_objects.PlaneAngleUom.DEGA,
+            ),
+            projected_axis_order=resqml_objects.AxisOrder2D.EASTING_NORTHING,
+            projected_uom=resqml_objects.LengthUom.M,
+            vertical_uom=resqml_objects.LengthUom.M,
+            zincreasing_downward=True,
+            vertical_crs=resqml_objects.VerticalCrsEpsgCode(
+                # https://epsg.io/9672
+                epsg_code=9672,
+            ),
+            projected_crs=resqml_objects.ProjectedCrsEpsgCode(
+                # https://epsg.io/23029
+                epsg_code=23029,
+            ),
+        )
 
-            # When setting maximal websocket payload size (for the server, and
-            # the client), the array below is the largest we can send and
-            # recieve in a single message.
-            # z_values = np.random.random((1, int(1.6e7 / 4) - 343))
+        # Create random test data
+        z_values = np.random.random((3, 4))
 
-            # Set up model for test data
-            model = resqpy.model.new_model(
-                os.path.join(tmpdirname, "tmp.epc"), quiet=False
-            )
-            # This needs to be done in order to get a uuid
-            crs = resqpy.crs.Crs(model, title="random-test-crs")
-            crs.create_xml()
+        # TODO: Test with large array.
+        # This requires subarray-handling.
+        # The array below can not be sent or received in a single message.
+        # z_values = np.random.random((2000, 2000))
 
-            mesh = resqpy.surface.Mesh(
-                model,
-                crs_uuid=model.crs_uuid,
-                mesh_flavour="reg&z",
-                ni=z_values.shape[1],
-                nj=z_values.shape[0],
-                origin=(np.random.random(), np.random.random(), 0.0),
-                dxyz_dij=np.array([[1.0, 0.0, 0.0], [0.0, 0.5, 0.0]]),
-                z_values=z_values,
-                title="random-test-data",
-            )
-            mesh.create_xml()
-            # Write to disk (the hdf5-file is constructed already in the
-            # model-constructor)
-            mesh.write_hdf5()
-            model.store_epc()
+        # When setting maximal websocket payload size (for the server, and
+        # the client), the array below is the largest we can send and
+        # recieve in a single message.
+        # z_values = np.random.random((1, int(1.6e7 / 4) - 343))
 
-            # Read epc-file from disk
-            dat = {}
-            with zipfile.ZipFile(model.epc_file, "r") as zfile:
-                for zinfo in filter(
-                    lambda x: x.filename.startswith("obj_"), zfile.infolist()
-                ):
-                    with zfile.open(zinfo.filename) as f:
-                        dat[zinfo.filename] = f.read()
+        x0 = np.random.random() * 1e6
+        y0 = np.random.random() * 1e6
+        dx = x0 / z_values.shape[0]
+        dy = y0 / z_values.shape[1]
 
-        context = XmlContext()
-        parser = XmlParser(context=context)
+        gri = resqml_objects.Grid2DRepresentation(
+            uuid=(grid_uuid := str(uuid.uuid4())),
+            schema_version=schema_version,
+            surface_role=resqml_objects.SurfaceRole.MAP,
+            citation=resqml_objects.Citation(
+                title="Random z-values",
+                **common_citation_fields,
+            ),
+            grid2d_patch=resqml_objects.Grid2DPatch(
+                # TODO: Perhaps we can use this for tiling?
+                patch_index=0,
+                # NumPy-arrays are C-ordered, meaning that the last index is
+                # the index that changes most rapidly. In this case this means
+                # that the columns are the fastest changing axis.
+                fastest_axis_count=z_values.shape[1],
+                slowest_axis_count=z_values.shape[0],
+                geometry=resqml_objects.PointGeometry(
+                    local_crs=resqml_objects.DataObjectReference(
+                        # NOTE: See Energistics Identifier Specification 4.0
+                        # (it is downloaded alongside the RESQML v2.0.1
+                        # standard) section 4.1 for an explanation on the
+                        # format of content_type.
+                        content_type=f"application/x-resqml+xml;version={schema_version};type={crs.Meta.name}",
+                        title=crs.citation.title,
+                        uuid=crs.uuid,
+                    ),
+                    points=resqml_objects.Point3DZvalueArray(
+                        supporting_geometry=resqml_objects.Point3DLatticeArray(
+                            origin=resqml_objects.Point3D(
+                                coordinate1=y0,
+                                coordinate2=x0,
+                                coordinate3=0.0,
+                            ),
+                            offset=[
+                                # Offset for the y-direction, i.e., the fastest axis
+                                resqml_objects.Point3DOffset(
+                                    offset=resqml_objects.Point3D(
+                                        coordinate1=1.0,
+                                        coordinate2=0.0,
+                                        coordinate3=0.0,
+                                    ),
+                                    spacing=resqml_objects.DoubleConstantArray(
+                                        value=dy,
+                                        count=z_values.shape[1] - 1,
+                                    ),
+                                ),
+                                # Offset for the x-direction, i.e., the slowest axis
+                                resqml_objects.Point3DOffset(
+                                    offset=resqml_objects.Point3D(
+                                        coordinate1=0.0,
+                                        coordinate2=1.0,
+                                        coordinate3=0.0,
+                                    ),
+                                    spacing=resqml_objects.DoubleConstantArray(
+                                        value=dx,
+                                        count=z_values.shape[0] - 1,
+                                    ),
+                                ),
+                            ],
+                        ),
+                        zvalues=resqml_objects.DoubleHdf5Array(
+                            values=resqml_objects.Hdf5Dataset(
+                                path_in_hdf_file=f"/RESQML/{grid_uuid}/zvalues",
+                                hdf_proxy=resqml_objects.DataObjectReference(
+                                    content_type=f"application/x-eml+xml;version={schema_version};type={epc.__class__.__name__}",
+                                    title=epc.citation.title,
+                                    uuid=epc.uuid,
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
         config = SerializerConfig(pretty_print=True)
         serializer = XmlSerializer(config=config)
 
-        epc_key = next(
-            filter(lambda x: "EpcExternalPart" in x, model.parts_forest.keys())
-        )
-        gri_key = next(
-            filter(lambda x: "Grid2dRepresentation" in x, model.parts_forest.keys())
-        )
-        crs_key = next(
-            filter(lambda x: "LocalDepth3dCrs" in x, model.parts_forest.keys())
-        )
-
-        # epc = parser.from_bytes(
-        #     ET.tostring(model.parts_forest[epc_key][2]),
-        #     resqml_objects.ObjEpcExternalPartReference,
-        # )
-        # print(serializer.render(epc))
-        epc = parser.from_bytes(
-            ET.tostring(model.parts_forest[epc_key][2]),
-            resqml_objects.EpcExternalPartReference,
-        )
-        # print(serializer.render(epc))
-        # wat
-        # xml = model.parts_forest[epc_key][2]
-        # ET.indent(xml)
-        # print(ET.tostring(xml, encoding=str))
-        # epc_m = resqml_objects.EpcExternalPartReference(
-        #     citation=resqml_objects.Citation(
-        #         title="Hdf Proxy",
-        #         originator="oyvind",
-        #         creation=datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S%z"),
-        #         format="equinor:home-made",
-        #     ),
-        #     schema_version="2.0",
-        #     uuid=uuid.uuid4(),
-        #     mime_type="application/x-hdf5",
-        # )
-        # pprint.pprint(epc_m)
-        # wat
-        # crs = parser.from_bytes(
-        #     ET.tostring(model.parts_forest[crs_key][2]),
-        #     resqml_objects.ObjLocalDepth3DCrs,
-        # )
-        # pprint.pprint(crs)
-        # print(serializer.render(crs))
-        crs = parser.from_bytes(
-            ET.tostring(model.parts_forest[crs_key][2]),
-            resqml_objects.LocalDepth3DCrs,
-        )
-        # ns = "http://www.energistics.org/energyml/data/resqmlv2"
-        # crs = DerivedElement(
-        #     qname=ET.QName(ns, "LocalDepth3dCrs").text,
-        #     value=crs,
-        #     type=ET.QName(ns, "obj_LocalDepth3dCrs").text,
-        # )
-        # print(serializer.render(crs))
-        # wat
-        # pprint.pprint(crs)
-        gri = parser.from_bytes(
-            ET.tostring(model.parts_forest[gri_key][2]),
-            resqml_objects.Grid2DRepresentation,
-        )
-        print(gri.grid2d_patch.geometry.local_crs.content_type)
-        gri.grid2d_patch.geometry.local_crs.content_type = (
-            "application/x-resqml+xml;version=2.0;type=LocalDepth3dCrs"
-        )
-        print(gri.grid2d_patch.geometry.local_crs.content_type)
-        dat2 = {
-            epc_key: str.encode(serializer.render(epc)),
-            crs_key: str.encode(serializer.render(crs)),
-            gri_key: str.encode(serializer.render(gri)),
-        }
-
-        data_object_types = []
-        uuids = []
-        xmls = []
-        titles = []
-        path_in_resources = []
-        for key, item in model.parts_forest.items():
-            dot, _uuid, xml = item
-
-            titles.append(get_title(xml))
-
-            res = get_path_in_resource(xml)
-
-            if len(res) == 1:
-                path_in_resources.append(res[0].text)
-
-            data_object_types.append(dot)
-            uuids.append(_uuid)
-            # Note that we here use the xmls from the etp-file instead of the
-            # ones from the resqpy model.
-            # xmls.append(dat[key])
-            xmls.append(dat2[key])
-
         records = await put_data_objects(
             ws,
             dataspace,
-            [data_object_types[0]],
-            [uuids[0]],
-            [xmls[0]],
-            # Titles are not unique
-            titles=titles if len(titles) == len(set(titles)) else None,
+            [epc.__class__.__name__],
+            [epc.uuid],
+            [str.encode(serializer.render(epc))],
+            titles=[epc.citation.title],
         )
 
         records = await put_data_objects(
             ws,
             dataspace,
-            [data_object_types[1]],
-            [uuids[1]],
-            [xmls[1]],
-            # Titles are not unique
-            titles=titles if len(titles) == len(set(titles)) else None,
+            [crs.Meta.name],
+            [crs.uuid],
+            [str.encode(serializer.render(crs))],
+            titles=[crs.citation.title],
         )
 
         records = await put_data_objects(
             ws,
             dataspace,
-            [data_object_types[2]],
-            [uuids[2]],
-            [xmls[2]],
-            # Titles are not unique
-            titles=titles if len(titles) == len(set(titles)) else None,
-        )
-
-        epc_types, epc_uuids = zip(
-            *filter(lambda x: "EpcExternal" in x[0], zip(data_object_types, uuids))
+            [gri.Meta.name],
+            [gri.uuid],
+            [str.encode(serializer.render(gri))],
+            titles=[gri.citation.title],
         )
 
         records = await put_data_arrays(
             ws,
             dataspace,
-            epc_types,
-            epc_uuids,
-            path_in_resources,
+            [getattr(epc.Meta, "name", "") or epc.__class__.__name__],
+            [epc.uuid],
+            [gri.grid2d_patch.geometry.points.zvalues.values.path_in_hdf_file],
             [z_values],
         )
 
@@ -963,35 +948,67 @@ async def start_and_stop(
             [resource["uri"] for resource in record["resources"]] for record in records
         ]
 
+        assert len(uris) == 1
+        assert (
+            get_data_object_uri(dataspace, epc.__class__.__name__, epc.uuid) in uris[0]
+        )
+        assert get_data_object_uri(dataspace, crs.Meta.name, crs.uuid) in uris[0]
+        assert get_data_object_uri(dataspace, gri.Meta.name, gri.uuid) in uris[0]
+
         records = await get_data_objects(ws, uris)
+        assert len(records) == 1
+        data_objects = records[0]["dataObjects"]
+        keys = list(data_objects)
 
-        pir = {}
-        epc_uri = ""
-        for record in records:
-            for uri, items in record["dataObjects"].items():
-                assert uri == items["resource"]["uri"]
-                if "EpcExternalPart" in uri:
-                    epc_uri = uri
+        epc_key = next(filter(lambda x: "EpcExternalPartReference" in x, keys))
+        crs_key = next(filter(lambda x: "LocalDepth3dCrs" in x, keys))
+        gri_key = next(filter(lambda x: "Grid2dRepresentation" in x, keys))
 
-                res = get_path_in_resource(items["data"])
-                if len(res) == 1:
-                    pir[uri] = res[0].text
+        parser = XmlParser(context=XmlContext())
 
-        assert epc_uri != ""
+        epc_r = parser.from_bytes(
+            data_objects[epc_key]["data"],
+            resqml_objects.EpcExternalPartReference,
+        )
+        crs_r = parser.from_bytes(
+            data_objects[crs_key]["data"],
+            resqml_objects.LocalDepth3DCrs,
+        )
+        gri_r = parser.from_bytes(
+            data_objects[gri_key]["data"],
+            resqml_objects.Grid2DRepresentation,
+        )
+
+        epc_uri = get_data_object_uri(
+            dataspace, resqml_objects.EpcExternalPartReference.__name__, epc_r.uuid
+        )
 
         # The metadata can be used to check the size of the array before
         # requesting the data. We should then optionally request the array in
         # several subarrays.
-        records = await get_data_array_metadata(ws, epc_uri, pir)
+        records = await get_data_array_metadata(
+            ws,
+            epc_uri,
+            dict(
+                grid=gri_r.grid2d_patch.geometry.points.zvalues.values.path_in_hdf_file
+            ),
+        )
 
         # Request the full array.
-        records = await get_data_arrays(ws, epc_uri, pir)
+        records = await get_data_arrays(
+            ws,
+            epc_uri,
+            dict(
+                grid=gri_r.grid2d_patch.geometry.points.zvalues.values.path_in_hdf_file
+            ),
+        )
 
         assert len(records) == 1
+        data_arrays = records[0]["dataArrays"]
 
         data = {
             key: etp_data_array_to_numpy(records[0]["dataArrays"][key])
-            for key in sorted(pir)
+            for key in sorted(data_arrays)
         }
 
         # Check that the returned data is the same as the data we sent
@@ -1006,41 +1023,38 @@ async def start_and_stop(
         records = await get_data_subarray(
             ws,
             epc_uri,
-            pir[sorted(pir)[0]],
+            gri_r.grid2d_patch.geometry.points.zvalues.values.path_in_hdf_file,
             starts=[0, 0],
             counts=[2, 3],
-            key=sorted(pir)[0],
         )
 
         sub_data_1 = {
             key: etp_data_array_to_numpy(records[0]["dataSubarrays"][key])
-            for key in sorted(pir)
+            for key in sorted(records[0]["dataSubarrays"])
         }
 
         records = await get_data_subarray(
             ws,
             epc_uri,
-            pir[sorted(pir)[0]],
+            gri_r.grid2d_patch.geometry.points.zvalues.values.path_in_hdf_file,
             starts=[0, 3],
             counts=[2, 1],
-            key=sorted(pir)[0],
         )
         sub_data_2 = {
             key: etp_data_array_to_numpy(records[0]["dataSubarrays"][key])
-            for key in sorted(pir)
+            for key in sorted(records[0]["dataSubarrays"])
         }
 
         records = await get_data_subarray(
             ws,
             epc_uri,
-            pir[sorted(pir)[0]],
+            gri_r.grid2d_patch.geometry.points.zvalues.values.path_in_hdf_file,
             starts=[2, 0],
             counts=[1, 4],
-            key=sorted(pir)[0],
         )
         sub_data_3 = {
             key: etp_data_array_to_numpy(records[0]["dataSubarrays"][key])
-            for key in sorted(pir)
+            for key in sorted(records[0]["dataSubarrays"])
         }
 
         subdata_rec = np.block(
