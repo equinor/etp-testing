@@ -536,7 +536,7 @@ async def get_data_objects(ws, uris):
     )
 
 
-async def get_data_array_metadata(ws, epc_uri, path_in_resource):
+async def get_data_array_metadata(ws, epc_uri, path_in_resources):
     # Get data array metadata
     mh_record = dict(
         protocol=9,  # DataArray
@@ -554,7 +554,7 @@ async def get_data_array_metadata(ws, epc_uri, path_in_resource):
                 uri=epc_uri,
                 pathInResource=val,
             )
-            for key, val in path_in_resource.items()
+            for key, val in path_in_resources.items()
         },
     )
 
