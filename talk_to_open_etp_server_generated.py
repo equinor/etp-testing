@@ -750,8 +750,7 @@ async def start_and_stop(
                     for ds in record["dataspaces"]
                 )
 
-        # Now 'dataspace' does not exist
-        # Next, we create it
+        # Here 'dataspace' does not exist so we create it
         records = await put_dataspaces(ws, [dataspace])
         if verify:
             # Test to see that the dataspace now exists
