@@ -1052,21 +1052,10 @@ async def start_and_stop(
         )
         np.testing.assert_allclose(list(data.values())[0], subdata_rec)
 
-        # XXX: Accessing too many columns crashes the server. Accessing too
-        # many rows only returns an exception.
-        # records = await get_data_subarray(
-        #     ws,
-        #     epc_uri,
-        #     pir[sorted(pir)[0]],
-        #     starts=[0, 0],
-        #     counts=[3, 5],
-        #     key=sorted(pir)[0],
-        # )
-
         await close_session(ws, "We are done 💅")
 
 
-# Run the round on localhost. This requires that the etp-server is running
+# Run the round-trip on localhost. This requires that the etp-server is running
 # locally.
 asyncio.run(start_and_stop())
 
