@@ -811,7 +811,10 @@ async def start_and_stop(
         )
 
         # Create random test data
-        z_values = np.random.random((3, 4))
+        # z_values = np.random.random((3, 4))
+
+        # Create random test data with a fairly large array
+        z_values = np.random.random((1500, 1500))
 
         # TODO: Test with large array.
         # This requires subarray-handling.
@@ -1038,7 +1041,7 @@ async def start_and_stop(
             epc_uri,
             gri_r.grid2d_patch.geometry.points.zvalues.values.path_in_hdf_file,
             starts=[0, 3],
-            counts=[2, 1],
+            counts=[2, z_values.shape[1] - 3],
         )
         sub_data_2 = {
             key: etp_data_array_to_numpy(records[0]["dataSubarrays"][key])
@@ -1050,7 +1053,7 @@ async def start_and_stop(
             epc_uri,
             gri_r.grid2d_patch.geometry.points.zvalues.values.path_in_hdf_file,
             starts=[2, 0],
-            counts=[1, 4],
+            counts=[z_values.shape[0] - 2, z_values.shape[1]],
         )
         sub_data_3 = {
             key: etp_data_array_to_numpy(records[0]["dataSubarrays"][key])
