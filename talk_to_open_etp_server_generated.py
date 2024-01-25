@@ -732,8 +732,11 @@ async def start_and_stop(
             "MaxWebSocketMessagePayloadSize"
         ]["item"]
 
+        # Start by listing all dataspaces on the ETP-server
         records = await get_dataspaces(ws, store_last_write_filter=None)
 
+        # Delete the demo/rand-cli dataspace ('dataspace') if it exists (to
+        # avoid piling up test-data)
         if any(
             ds["path"] == dataspace for record in records for ds in record["dataspaces"]
         ):
@@ -761,6 +764,10 @@ async def start_and_stop(
             )
         # Here 'dataspace' exists
 
+        # Build the RESQML-objects "manually" from the generated dataclasses.
+        # Their content is described also in the RESQML v2.0.1 standard that is
+        # available for download here:
+        # https://publications.opengroup.org/standards/energistics-standards/v231a
         common_citation_fields = dict(
             creation=XmlDateTime.from_string(
                 datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S%z")
@@ -780,6 +787,20 @@ async def start_and_stop(
             mime_type="application/x-hdf5",
         )
 
+        # Generate some random offsets and rotation of the CRS.
+
+        xoffset = np.random.random()
+        yoffset = np.random.random()
+        zoffset = np.random.random()
+        rotation = np.random.random()
+
+        # Example EPSG-code
+        # https://epsg.io/9672
+        vertical_epsg = 9672
+        # Example EPSG-code
+        # https://epsg.io/23029
+        projected_epsg = 23029
+
         crs = resqml_objects.LocalDepth3DCrs(
             citation=resqml_objects.Citation(
                 title="Random CRS",
@@ -787,11 +808,11 @@ async def start_and_stop(
             ),
             schema_version=schema_version,
             uuid=str(uuid.uuid4()),
-            xoffset=0.0,
-            yoffset=0.0,
-            zoffset=0.0,
+            xoffset=xoffset,
+            yoffset=yoffset,
+            zoffset=zoffset,
             areal_rotation=resqml_objects.PlaneAngleMeasure(
-                value=0.0,
+                value=rotation,
                 uom=resqml_objects.PlaneAngleUom.DEGA,
             ),
             projected_axis_order=resqml_objects.AxisOrder2D.EASTING_NORTHING,
@@ -799,20 +820,20 @@ async def start_and_stop(
             vertical_uom=resqml_objects.LengthUom.M,
             zincreasing_downward=True,
             vertical_crs=resqml_objects.VerticalCrsEpsgCode(
-                # https://epsg.io/9672
-                epsg_code=9672,
+                epsg_code=vertical_epsg,
             ),
             projected_crs=resqml_objects.ProjectedCrsEpsgCode(
-                # https://epsg.io/23029
-                epsg_code=23029,
+                epsg_code=projected_epsg,
             ),
         )
 
         # Create random test data
         # z_values = np.random.random((3, 4))
 
-        # Create random test data with a fairly large array
-        z_values = np.random.random((1500, 1500))
+        # Create random test data with a fairly large array.  This one works
+        # for the default websocket-sizes on the ETP-server (the one we use in
+        # this example).
+        z_values = np.random.random((2000, 1990))
 
         # TODO: Test with large array.
         # This requires subarray-handling.
@@ -824,6 +845,8 @@ async def start_and_stop(
         # recieve in a single message.
         # z_values = np.random.random((1, int(1.6e7 / 4) - 343))
 
+        # Set some random origins, and calculate the step-size for each
+        # direction
         x0 = np.random.random() * 1e6
         y0 = np.random.random() * 1e6
         dx = x0 / z_values.shape[0]
@@ -858,16 +881,16 @@ async def start_and_stop(
                     points=resqml_objects.Point3DZvalueArray(
                         supporting_geometry=resqml_objects.Point3DLatticeArray(
                             origin=resqml_objects.Point3D(
-                                coordinate1=y0,
-                                coordinate2=x0,
+                                coordinate1=x0,
+                                coordinate2=y0,
                                 coordinate3=0.0,
                             ),
                             offset=[
                                 # Offset for the y-direction, i.e., the fastest axis
                                 resqml_objects.Point3DOffset(
                                     offset=resqml_objects.Point3D(
-                                        coordinate1=1.0,
-                                        coordinate2=0.0,
+                                        coordinate1=0.0,
+                                        coordinate2=1.0,
                                         coordinate3=0.0,
                                     ),
                                     spacing=resqml_objects.DoubleConstantArray(
@@ -878,8 +901,8 @@ async def start_and_stop(
                                 # Offset for the x-direction, i.e., the slowest axis
                                 resqml_objects.Point3DOffset(
                                     offset=resqml_objects.Point3D(
-                                        coordinate1=0.0,
-                                        coordinate2=1.0,
+                                        coordinate1=1.0,
+                                        coordinate2=0.0,
                                         coordinate3=0.0,
                                     ),
                                     spacing=resqml_objects.DoubleConstantArray(
@@ -904,69 +927,146 @@ async def start_and_stop(
             ),
         )
 
+        # Set up the XML-serializer from xsdata in order to write the RESQML
+        # dataclass objects above to XML.
         config = SerializerConfig(pretty_print=True)
         serializer = XmlSerializer(config=config)
 
+        # NOTE: The name of the xsdata-generated dataclasses uses Python naming
+        # convention (captical camel-case for classes), and the proper
+        # data-object-type as recognized by RESQML and ETP is kept in the
+        # internal Meta-class of the objects (if the name has changed).
+        # This means that the data-object-type of a RESQML-object is _either_
+        # just the class-name (if the name remains unchanged from the
+        # xsdata-generation as in the EpcExternalPartReference-case), or it is
+        # kept in <object>.Meta.name (as in the both the Grid2dRepresentation
+        # and LocalDepth3dCrs cases).
+        # A robust way of fetch the right data-object-type irrespective of where the name is kept is to use
+        #
+        #   data_object_type = getattr(<object>.Meta, "name", "") or <object>.__class__.__name__
+        #
+        # This fetches the name from <object>.Meta.name if that exists,
+        # otherwise we use the the class-name (which will be the same as in the
+        # RESQML-standard).
+        get_data_object_type = (
+            lambda obj: getattr(obj.Meta, "name", "") or obj.__class__.__name__
+        )
+
+        # Upload the EpcExternalPartReference-object to the ETP-server.
         records = await put_data_objects(
             ws,
             dataspace,
-            [epc.__class__.__name__],
+            [get_data_object_type(epc)],
             [epc.uuid],
+            # Serialize the epc-object to XML
             [str.encode(serializer.render(epc))],
             titles=[epc.citation.title],
         )
 
+        # Upload the LocalDepth3dCrs-object to the ETP-server
         records = await put_data_objects(
             ws,
             dataspace,
-            [crs.Meta.name],
+            [get_data_object_type(crs)],
             [crs.uuid],
+            # Serialize the crs-object to XML
             [str.encode(serializer.render(crs))],
             titles=[crs.citation.title],
         )
 
+        # Upload the Grid2dRepresentation-object to the ETP-server
         records = await put_data_objects(
             ws,
             dataspace,
-            [gri.Meta.name],
+            [get_data_object_type(gri)],
             [gri.uuid],
+            # Serialize the gri-object to XML
             [str.encode(serializer.render(gri))],
             titles=[gri.citation.title],
         )
 
+        # NOTE: All objects can be uploaded simultaneously by the call below:
+        # records = await put_data_objects(
+        #     ws,
+        #     dataspace,
+        #     [
+        #         get_data_object_type(epc),
+        #         get_data_object_type(crs),
+        #         get_data_object_type(gri),
+        #     ],
+        #     [
+        #         epc.uuid,
+        #         crs.uuid,
+        #         gri.uuid,
+        #     ],
+        #     [
+        #         str.encode(serializer.render(epc)),
+        #         str.encode(serializer.render(crs)),
+        #         str.encode(serializer.render(gri)),
+        #     ],
+        #     titles=[
+        #         epc.citation.title,
+        #         crs.citation.title,
+        #         gri.citation.title,
+        #     ],
+        # )
+
+        # Upload the actual array data connected to the Grid2dRepresentation
         records = await put_data_arrays(
             ws,
             dataspace,
-            [getattr(epc.Meta, "name", "") or epc.__class__.__name__],
+            # NOTE: This uses the data-object-type and uuid from the
+            # EpcExternalPartReference-object.
+            [get_data_object_type(epc)],
             [epc.uuid],
+            # Fetch the key into the Hdf5-file (note that we do not use hdf5
+            # locally, but this is the key that will be used on the server).
             [gri.grid2d_patch.geometry.points.zvalues.values.path_in_hdf_file],
             [z_values],
         )
 
+        # Here we are done uploading all data to the ETP-server.
+        # Next, we download the data again, and check that we have recovered
+        # everything.
+
+        # List all stored data on the ETP-server under 'dataspace'.
         records = await get_resources(ws, dataspace)
 
+        # Fetch all uris (remember, we have deleted everything, so there should
+        # only be three uris for the epc, crs and the gri-objects).
         uris = [
             [resource["uri"] for resource in record["resources"]] for record in records
         ]
 
-        assert len(uris) == 1
+        assert len(uris) == 1 and len(uris[0]) == 3
+        # Verify that we are able to construct the same uris locally from
+        # 'dataspace', the data-object-type and the corresponding uuid.
         assert (
             get_data_object_uri(dataspace, epc.__class__.__name__, epc.uuid) in uris[0]
         )
         assert get_data_object_uri(dataspace, crs.Meta.name, crs.uuid) in uris[0]
         assert get_data_object_uri(dataspace, gri.Meta.name, gri.uuid) in uris[0]
 
+        # Download all three data objects from the ETP-server.
         records = await get_data_objects(ws, uris)
+        # Check that all objects were downloaded in one go (these could be
+        # split up into three different get_data_objects-calls, similarly to
+        # the put_data_objects-calls above).
         assert len(records) == 1
+
         data_objects = records[0]["dataObjects"]
         keys = list(data_objects)
 
+        # Find the relevant keys in the returned data.
         epc_key = next(filter(lambda x: "EpcExternalPartReference" in x, keys))
         crs_key = next(filter(lambda x: "LocalDepth3dCrs" in x, keys))
         gri_key = next(filter(lambda x: "Grid2dRepresentation" in x, keys))
 
+        # Set up an XML-parser from xsdata.
         parser = XmlParser(context=XmlContext())
 
+        # Construct the RESQML-dataclass objects from the raw binary XML-data
+        # from the ETP-server.
         epc_r = parser.from_bytes(
             data_objects[epc_key]["data"],
             resqml_objects.EpcExternalPartReference,
@@ -980,13 +1080,78 @@ async def start_and_stop(
             resqml_objects.Grid2DRepresentation,
         )
 
+        # Test that the returned objects are the same as the ones that were
+        # uploaded. Note that this comparison are on the values inside the
+        # objects, and not that they are the same type.
+        assert epc_r == epc and id(epc_r) != id(epc)
+        assert crs_r == crs and id(crs_r) != id(crs)
+        assert gri_r == gri and id(gri_r) != id(gri)
+
+        # Fetch relevant values from crs_r and gri_r and check that they are
+        # the same as the ones that were inserted originally. The purpose here
+        # is twofold: first, demonstrate how the values can be extracted from
+        # the RESQML-dataclass, and second an extra test that the values are
+        # indeed the same (sanity check for the comparison of the full objects
+        # above).
+        # NOTE: All tests use strict equality even though we are comparing
+        # floating point numbers. The values should be preserved exactly, but
+        # if this errors, perhaps some round-off do occur either on the server
+        # or locally. An approximate equality might then be a more sensible
+        # test.
+        assert xoffset == crs_r.xoffset
+        assert yoffset == crs_r.yoffset
+        assert zoffset == crs_r.zoffset
+        assert rotation == crs_r.areal_rotation.value
+        assert vertical_epsg == crs_r.vertical_crs.epsg_code
+        assert projected_epsg == crs_r.projected_crs.epsg_code
+
+        assert z_values.shape[0] == gri_r.grid2d_patch.slowest_axis_count
+        assert z_values.shape[1] == gri_r.grid2d_patch.fastest_axis_count
+        assert (
+            x0
+            == gri_r.grid2d_patch.geometry.points.supporting_geometry.origin.coordinate1
+        )
+        assert (
+            y0
+            == gri_r.grid2d_patch.geometry.points.supporting_geometry.origin.coordinate2
+        )
+        assert (
+            dx
+            == gri_r.grid2d_patch.geometry.points.supporting_geometry.offset[
+                1
+            ].spacing.value
+        )
+        assert (
+            dy
+            == gri_r.grid2d_patch.geometry.points.supporting_geometry.offset[
+                0
+            ].spacing.value
+        )
+
+        # Construct the EpcExternalPartReference-uri from the returned
+        # epc_r-object. We need this uri when we download the array data.
         epc_uri = get_data_object_uri(
             dataspace, resqml_objects.EpcExternalPartReference.__name__, epc_r.uuid
         )
+        # Alternatively, fetch the epc-uri from the gri_r-object using the
+        # pattern below.
+        epc_uri_alt = get_data_object_uri(
+            dataspace,
+            re.search(
+                r";type=(.+)",
+                gri_r.grid2d_patch.geometry.points.zvalues.values.hdf_proxy.content_type,
+            )[1],
+            gri_r.grid2d_patch.geometry.points.zvalues.values.hdf_proxy.uuid,
+        )
+        # Check that both ways give the same uri
+        assert epc_uri == epc_uri_alt
 
         # The metadata can be used to check the size of the array before
-        # requesting the data. We should then optionally request the array in
-        # several subarrays.
+        # requesting the data. We could then optionally request the array in
+        # several subarrays. If you know in advance that the full array can be
+        # returned in one go, then this step is not necessary.
+        # Here we use it to read out the shape of the array (which can be used
+        # to determine the size).
         records = await get_data_array_metadata(
             ws,
             epc_uri,
@@ -994,8 +1159,12 @@ async def start_and_stop(
                 grid=gri_r.grid2d_patch.geometry.points.zvalues.values.path_in_hdf_file
             ),
         )
+        # Fetch shape of the array.
+        z_shape = tuple(records[0]["arrayMetadata"]["grid"]["dimensions"])
+        # Check that this is the same as the originally constructed array.
+        assert z_shape == z_values.shape
 
-        # Request the full array.
+        # Request the full array in one go.
         records = await get_data_arrays(
             ws,
             epc_uri,
@@ -1007,13 +1176,15 @@ async def start_and_stop(
         assert len(records) == 1
         data_arrays = records[0]["dataArrays"]
 
+        # Convert the data to a NumPy-array. Considering that we only requested
+        # a single array we could get rid of the dictionary wrapper here.
         data = {
             key: etp_data_array_to_numpy(records[0]["dataArrays"][key])
             for key in sorted(data_arrays)
         }
 
         # Check that the returned data is the same as the data we sent
-        assert data[sorted(data)[0]].shape == z_values.shape
+        assert data[sorted(data)[0]].shape == z_shape
         np.testing.assert_allclose(
             data[sorted(data)[0]],
             z_values,
@@ -1021,6 +1192,12 @@ async def start_and_stop(
 
         # Test the subarray capabilities. We request the full data array via
         # three subarray blocks, and reconstruct the full array in the end.
+        # The shape of the blocks are:
+        #
+        #  [[sub_data_1, sub_data_2],
+        #   [      sub_data_3      ]]
+        #
+        # where each sub_data_n is a block-array.
         records = await get_data_subarray(
             ws,
             epc_uri,
@@ -1058,14 +1235,18 @@ async def start_and_stop(
             for key in sorted(records[0]["dataSubarrays"])
         }
 
+        # Reconstruct the full array from the three blocks.
         subdata_rec = np.block(
             [
                 [list(sub_data_1.values())[0], list(sub_data_2.values())[0]],
                 [list(sub_data_3.values())[0]],
             ]
         )
+        # Test that we have reconstructed the original data.
+        np.testing.assert_allclose(z_values, subdata_rec)
         np.testing.assert_allclose(list(data.values())[0], subdata_rec)
 
+        # Terminate the ETP-session, and return
         await close_session(ws, "We are done 💅")
 
 
