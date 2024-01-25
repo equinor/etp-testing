@@ -19,8 +19,6 @@ import httpx
 import websockets
 import fastavro
 import numpy as np
-import resqpy
-import resqpy.model
 
 
 from xsdata.models.datatype import XmlDateTime
