@@ -1,5 +1,4 @@
 import re
-import os
 import sys
 import io
 import uuid
@@ -7,11 +6,9 @@ import time
 import asyncio
 import json
 import datetime
-import tempfile
 import warnings
 import pprint
 import enum
-import zipfile
 
 # Third-party imports
 import lxml.etree as ET
@@ -26,7 +23,6 @@ from xsdata.formats.dataclass.context import XmlContext
 from xsdata.formats.dataclass.parsers import XmlParser
 from xsdata.formats.dataclass.serializers import XmlSerializer
 from xsdata.formats.dataclass.serializers.config import SerializerConfig
-from xsdata.formats.dataclass.models.generics import DerivedElement
 
 import resqml_objects
 
@@ -109,26 +105,6 @@ def serialize_message(header_record, body_record, body_schema_key):
     fastavro.write.schemaless_writer(fo, etp_schemas[body_schema_key], body_record)
 
     return fo.getvalue()
-
-
-def get_path_in_resource(xml):
-    if type(xml) in [str, bytes]:
-        xml = ET.fromstring(xml)
-
-    return xml.xpath("//*[starts-with(local-name(), 'PathInHdfFile')]")
-
-
-def get_title(xml):
-    if type(xml) in [str, bytes]:
-        xml = ET.fromstring(xml)
-
-    # Assuming a single "Citation" tag, with a single "Title" tag
-    return next(
-        filter(
-            lambda se: "Title" in se.tag,
-            next(filter(lambda e: "Citation" in e.tag, xml.iter())).iter(),
-        )
-    ).text
 
 
 def get_data_object_uri(dataspace, data_object_type, _uuid):
