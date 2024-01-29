@@ -682,6 +682,37 @@ async def get_data_subarray(ws, epc_uri, path_in_resource, starts, counts, key=N
         ws, "Energistics.Etp.v12.Protocol.DataArray.GetDataSubarraysResponse"
     )
 
+async def delete_data_objects(ws, uris, pruneContainedObjects=False):
+    mh_record = dict(
+        protocol=4, # Store
+        messageType=3, # DeleteDataObjects
+        correlationId=0, # Ignored
+        messageId=await ClientMessageId.get_next_id(),
+        messageFlags=MHFlags.FIN.value, # Multi-part=False
+    )
+
+    ddo_record = dict(
+        uris=dict((uri, uri) for uri in uris),
+        # -- pruneContainedObjects:
+        # let ETP server delete contained or related objects that are
+        # not contained by any other data objects
+        # Consider to set this to always be True when deleting
+        # a map
+        # FIXME: doesn't seem to be working correctly yet; consider filing 
+        # an issue for ETP server
+        pruneContainedObjects=pruneContainedObjects 
+    )
+
+    await ws.send(
+        serialize_message(
+            mh_record,
+            ddo_record,
+            "Energistics.Etp.v12.Protocol.Store.DeleteDataObjects"
+        )
+    )
+    return await handle_multipart_response(
+        ws, "Energistics.Etp.v12.Protocol.Store.DeleteDataObjectsResponse"
+    )
 
 async def start_and_stop(
     url="ws://localhost:9002", headers={}, dataspace="demo/rand-cli", verify=True
@@ -1221,6 +1252,16 @@ async def start_and_stop(
         # Test that we have reconstructed the original data.
         np.testing.assert_allclose(z_values, subdata_rec)
         np.testing.assert_allclose(list(data.values())[0], subdata_rec)
+
+        # Delete a 'map' object, i. e., delete all the resources of the dataspace 
+        # given their uris
+        records = await get_resources(ws, dataspace)
+        uris = [resource["uri"] for resource in records[0]["resources"]]
+        records = await delete_data_objects(ws, uris, False)
+            
+        # Test that all resources have been deleted
+        records = await get_resources(ws, dataspace)
+        assert len(records[0]["resources"]) == 0
 
         # Terminate the ETP-session, and return
         await close_session(ws, "We are done 💅")
