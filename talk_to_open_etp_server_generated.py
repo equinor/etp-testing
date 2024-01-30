@@ -9,6 +9,7 @@ import datetime
 import warnings
 import pprint
 import enum
+import math
 
 # Third-party imports
 import lxml.etree as ET
@@ -16,6 +17,7 @@ import httpx
 import websockets
 import fastavro
 import numpy as np
+import tqdm
 
 
 from xsdata.models.datatype import XmlDateTime
@@ -118,6 +120,27 @@ def get_data_object_uri(dataspace, data_object_type, _uuid):
         )
 
     return f"eml:///dataspace('{dataspace}')/{data_object_type}({_uuid})"
+
+
+def get_data_object_type(obj):
+    # NOTE: The name of the xsdata-generated dataclasses uses Python naming
+    # convention (captical camel-case for classes), and the proper
+    # data-object-type as recognized by RESQML and ETP is kept in the internal
+    # Meta-class of the objects (if the name has changed).  This means that the
+    # data-object-type of a RESQML-object is _either_ just the class-name (if
+    # the name remains unchanged from the xsdata-generation as in the
+    # EpcExternalPartReference-case), or it is kept in <object>.Meta.name (as
+    # in the both the Grid2dRepresentation and LocalDepth3dCrs cases).
+    # A robust way of fetch the right data-object-type irrespective of where
+    # the name is kept is to use
+    #
+    #   data_object_type = getattr(<object>.Meta, "name", "") or <object>.__class__.__name__
+    #
+    # This fetches the name from <object>.Meta.name if that exists, otherwise
+    # we use the the class-name (which will be the same as in the
+    # RESQML-standard).
+
+    return getattr(obj.Meta, "name", "") or obj.__class__.__name__
 
 
 async def request_session(
@@ -556,9 +579,120 @@ def numpy_to_etp_data_array(array):
     )
 
 
+def numpy_to_etp_data_subarray(subarray):
+    return dict(item=dict(values=subarray.ravel().tolist()))
+
+
 def etp_data_array_to_numpy(data_array):
     return np.asarray(data_array["data"]["item"]["values"]).reshape(
         data_array["dimensions"]
+    )
+
+
+async def put_uninitialized_data_arrays(
+    ws, dataspace, data_object_types, uuids, path_in_resources, arrays
+):
+    time = datetime.datetime.now(datetime.timezone.utc).timestamp()
+    uris = [
+        get_data_object_uri(dataspace, dot, _uuid)
+        for dot, _uuid in zip(data_object_types, uuids)
+    ]
+
+    mh_record = dict(
+        protocol=9,  # DataArray
+        messageType=9,  # PutUninitializedDataArrays
+        correlationId=0,  # Ignored
+        messageId=await ClientMessageId.get_next_id(),
+        messageFlags=MHFlags.FIN.value,  # Multi-part=False
+    )
+    puda_record = dict(
+        dataArrays={
+            uri: dict(
+                uid=dict(
+                    uri=uri,
+                    pathInResource=pir,
+                ),
+                metadata=dict(
+                    dimensions=list(arr.shape),
+                    # NOTE: Using arrayOfDouble64LE with arrayOfDouble did not
+                    # work even though we used np.float64-arrays.
+                    # These fields seem not to work as intended. The ETP-server
+                    # responds with (invalid) combinations (according to
+                    # section 13.2.2.1 in the ETP v1.2 spec), but we are able
+                    # to reconstruct the full data from the returned values.
+                    transportArrayType="arrayOfFloat",
+                    logicalArrayType="arrayOfBoolean",
+                    storeLastWrite=time,
+                    storeCreated=time,
+                ),
+            )
+            for uri, pir, arr in zip(uris, path_in_resources, arrays)
+        }
+    )
+
+    await ws.send(
+        serialize_message(
+            mh_record,
+            puda_record,
+            "Energistics.Etp.v12.Protocol.DataArray.PutUninitializedDataArrays",
+        )
+    )
+
+    return await handle_multipart_response(
+        ws,
+        "Energistics.Etp.v12.Protocol.DataArray.PutUninitializedDataArraysResponse",
+    )
+
+
+async def put_data_subarrays(
+    ws,
+    dataspace,
+    data_object_types,
+    uuids,
+    path_in_resources,
+    subarrays,
+    starts,
+):
+    uris = [
+        get_data_object_uri(dataspace, dot, _uuid)
+        for dot, _uuid in zip(data_object_types, uuids)
+    ]
+
+    mh_record = dict(
+        protocol=9,  # DataArray
+        messageType=5,  # PutDataSubarrays
+        correlationId=0,  # Ignored
+        messageId=await ClientMessageId.get_next_id(),
+        messageFlags=MHFlags.FIN.value,  # Multi-part=False
+    )
+    pds_record = dict(
+        dataSubarrays={
+            uri: dict(
+                uid=dict(
+                    uri=uri,
+                    pathInResource=pir,
+                ),
+                data=numpy_to_etp_data_subarray(subarray),
+                starts=start,
+                counts=list(subarray.shape),
+            )
+            for uri, subarray, start, pir in zip(
+                uris, subarrays, starts, path_in_resources
+            )
+        }
+    )
+
+    await ws.send(
+        serialize_message(
+            mh_record,
+            pds_record,
+            "Energistics.Etp.v12.Protocol.DataArray.PutDataSubarrays",
+        )
+    )
+
+    return await handle_multipart_response(
+        ws,
+        "Energistics.Etp.v12.Protocol.DataArray.PutDataSubarraysResponse",
     )
 
 
@@ -644,6 +778,50 @@ async def get_data_arrays(ws, epc_uri, path_in_resources):
     )
 
 
+async def get_data_subarrays(
+    ws, dataspace, data_object_types, uuids, path_in_resources, starts_list, counts_list
+):
+    uris = [
+        get_data_object_uri(dataspace, dot, _uuid)
+        for dot, _uuid in zip(data_object_types, uuids)
+    ]
+
+    mh_record = dict(
+        protocol=9,  # DataArray
+        messageType=3,  # GetDataSubarrays
+        correlationId=0,  # Ignored
+        messageId=await ClientMessageId.get_next_id(),
+        messageFlags=MHFlags.FIN.value,  # Multi-part=False
+    )
+    gds_record = dict(
+        dataSubarrays={
+            uri: dict(
+                uid=dict(
+                    uri=uri,
+                    pathInResource=pir,
+                ),
+                starts=starts,
+                counts=counts,
+            )
+            for uri, starts, counts, pir in zip(
+                uris, starts_list, counts_list, path_in_resources
+            )
+        },
+    )
+
+    await ws.send(
+        serialize_message(
+            mh_record,
+            gds_record,
+            "Energistics.Etp.v12.Protocol.DataArray.GetDataSubarrays",
+        )
+    )
+
+    return await handle_multipart_response(
+        ws, "Energistics.Etp.v12.Protocol.DataArray.GetDataSubarraysResponse"
+    )
+
+
 async def get_data_subarray(ws, epc_uri, path_in_resource, starts, counts, key=None):
     # This method only supports the request of a single subarray.
     # The protocol from ETP can support the request of multiple subarrays.
@@ -682,13 +860,14 @@ async def get_data_subarray(ws, epc_uri, path_in_resource, starts, counts, key=N
         ws, "Energistics.Etp.v12.Protocol.DataArray.GetDataSubarraysResponse"
     )
 
+
 async def delete_data_objects(ws, uris, pruneContainedObjects=False):
     mh_record = dict(
-        protocol=4, # Store
-        messageType=3, # DeleteDataObjects
-        correlationId=0, # Ignored
+        protocol=4,  # Store
+        messageType=3,  # DeleteDataObjects
+        correlationId=0,  # Ignored
         messageId=await ClientMessageId.get_next_id(),
-        messageFlags=MHFlags.FIN.value, # Multi-part=False
+        messageFlags=MHFlags.FIN.value,  # Multi-part=False
     )
 
     ddo_record = dict(
@@ -698,24 +877,30 @@ async def delete_data_objects(ws, uris, pruneContainedObjects=False):
         # not contained by any other data objects
         # Consider to set this to always be True when deleting
         # a map
-        # FIXME: doesn't seem to be working correctly yet; consider filing 
+        # FIXME: doesn't seem to be working correctly yet; consider filing
         # an issue for ETP server
-        pruneContainedObjects=pruneContainedObjects 
+        pruneContainedObjects=pruneContainedObjects,
     )
 
     await ws.send(
         serialize_message(
             mh_record,
             ddo_record,
-            "Energistics.Etp.v12.Protocol.Store.DeleteDataObjects"
+            "Energistics.Etp.v12.Protocol.Store.DeleteDataObjects",
         )
     )
     return await handle_multipart_response(
         ws, "Energistics.Etp.v12.Protocol.Store.DeleteDataObjectsResponse"
     )
 
+
 async def start_and_stop(
-    url="ws://localhost:9002", headers={}, dataspace="demo/rand-cli", verify=True
+    url="ws://localhost:9002",
+    headers={},
+    dataspace="demo/rand-cli",
+    verify=True,
+    z_shape=(3, 4),
+    scaling=1.0,
 ):
     print(f"Talking to: {url}")
     # Note that websockets compress the messages by default, and further
@@ -729,15 +914,21 @@ async def start_and_stop(
         # _incoming messages_.
         max_size=int(1.6e7),
     ) as ws:
-        # XXX: Passing in a max_payload_size < 1000 (or thereabouts) will crash
+        # NOTE: Passing in a max_payload_size < 1000 (or thereabouts) will crash
         # the server!
         records = await request_session(ws, max_payload_size=int(1.6e7))
-        # Note, this size is the minimum of the suggested size sent in the
+        # NOTE: this size is the minimum of the suggested size sent in the
         # "RequestSession" and the returned value from the server in
         # "OpenSession".
+        # TODO: Figure out if this includes the message header and the metadata
+        # in the message bodies.
         max_payload_size = records[0]["endpointCapabilities"][
             "MaxWebSocketMessagePayloadSize"
         ]["item"]
+        # TODO: In case we need to include room for the message header and the
+        # metadata in the message body, subtract that from the payload size.
+        # Below is a guess.
+        max_payload_size -= 1e3
 
         # Start by listing all dataspaces on the ETP-server
         records = await get_dataspaces(ws, store_last_write_filter=None)
@@ -835,22 +1026,14 @@ async def start_and_stop(
         )
 
         # Create random test data
-        # z_values = np.random.random((3, 4))
+        z_values = np.random.random(z_shape).astype(np.float32) * scaling
 
         # Create random test data with a fairly large array.  This one works
         # for the default websocket-sizes on the ETP-server (the one we use in
         # this example).
-        z_values = np.random.random((2000, 1990))
-
-        # TODO: Test with large array.
-        # This requires subarray-handling.
-        # The array below can not be sent or received in a single message.
-        # z_values = np.random.random((2000, 2000))
-
-        # When setting maximal websocket payload size (for the server, and
-        # the client), the array below is the largest we can send and
-        # recieve in a single message.
-        # z_values = np.random.random((1, int(1.6e7 / 4) - 343))
+        # NOTE: The avro serialization seems to always serialize the array data
+        # as 32-bit floats.
+        # z_values = np.random.random((5000, 4000)).astype(np.float32)
 
         # Set some random origins, and calculate the step-size for each
         # direction
@@ -881,7 +1064,7 @@ async def start_and_stop(
                         # (it is downloaded alongside the RESQML v2.0.1
                         # standard) section 4.1 for an explanation on the
                         # format of content_type.
-                        content_type=f"application/x-resqml+xml;version={schema_version};type={crs.Meta.name}",
+                        content_type=f"application/x-resqml+xml;version={schema_version};type={get_data_object_type(crs)}",
                         title=crs.citation.title,
                         uuid=crs.uuid,
                     ),
@@ -923,7 +1106,7 @@ async def start_and_stop(
                             values=resqml_objects.Hdf5Dataset(
                                 path_in_hdf_file=f"/RESQML/{grid_uuid}/zvalues",
                                 hdf_proxy=resqml_objects.DataObjectReference(
-                                    content_type=f"application/x-eml+xml;version={schema_version};type={epc.__class__.__name__}",
+                                    content_type=f"application/x-eml+xml;version={schema_version};type={get_data_object_type(epc)}",
                                     title=epc.citation.title,
                                     uuid=epc.uuid,
                                 ),
@@ -939,98 +1122,95 @@ async def start_and_stop(
         config = SerializerConfig(pretty_print=True)
         serializer = XmlSerializer(config=config)
 
-        # NOTE: The name of the xsdata-generated dataclasses uses Python naming
-        # convention (captical camel-case for classes), and the proper
-        # data-object-type as recognized by RESQML and ETP is kept in the
-        # internal Meta-class of the objects (if the name has changed).
-        # This means that the data-object-type of a RESQML-object is _either_
-        # just the class-name (if the name remains unchanged from the
-        # xsdata-generation as in the EpcExternalPartReference-case), or it is
-        # kept in <object>.Meta.name (as in the both the Grid2dRepresentation
-        # and LocalDepth3dCrs cases).
-        # A robust way of fetch the right data-object-type irrespective of where the name is kept is to use
-        #
-        #   data_object_type = getattr(<object>.Meta, "name", "") or <object>.__class__.__name__
-        #
-        # This fetches the name from <object>.Meta.name if that exists,
-        # otherwise we use the the class-name (which will be the same as in the
-        # RESQML-standard).
-        get_data_object_type = (
-            lambda obj: getattr(obj.Meta, "name", "") or obj.__class__.__name__
-        )
-
-        # Upload the EpcExternalPartReference-object to the ETP-server.
+        # NOTE: All objects can be uploaded simultaneously by the call below.
+        # This is the recommended way of doing it as uploading a single object
+        # at a time can break if the ordering is wrong. The reason is that the
+        # server looks for references to other objects, and if it is missing a
+        # reference, the upload errors. Also, when the objects are small enough
+        # the upload can be done with a single message to the ETP-server.
         records = await put_data_objects(
             ws,
             dataspace,
-            [get_data_object_type(epc)],
-            [epc.uuid],
-            # Serialize the epc-object to XML
-            [str.encode(serializer.render(epc))],
-            titles=[epc.citation.title],
+            [
+                get_data_object_type(epc),
+                get_data_object_type(crs),
+                get_data_object_type(gri),
+            ],
+            [
+                epc.uuid,
+                crs.uuid,
+                gri.uuid,
+            ],
+            [
+                str.encode(serializer.render(epc)),
+                str.encode(serializer.render(crs)),
+                str.encode(serializer.render(gri)),
+            ],
+            titles=[
+                epc.citation.title,
+                crs.citation.title,
+                gri.citation.title,
+            ],
         )
 
-        # Upload the LocalDepth3dCrs-object to the ETP-server
-        records = await put_data_objects(
-            ws,
-            dataspace,
-            [get_data_object_type(crs)],
-            [crs.uuid],
-            # Serialize the crs-object to XML
-            [str.encode(serializer.render(crs))],
-            titles=[crs.citation.title],
-        )
+        # Compute the size of z_values in bytes.
+        z_size = np.ceil(z_values.size * z_values.dtype.itemsize)
 
-        # Upload the Grid2dRepresentation-object to the ETP-server
-        records = await put_data_objects(
-            ws,
-            dataspace,
-            [get_data_object_type(gri)],
-            [gri.uuid],
-            # Serialize the gri-object to XML
-            [str.encode(serializer.render(gri))],
-            titles=[gri.citation.title],
-        )
+        # Check if z_values fits in a single websocket message.
+        if z_size < max_payload_size:
+            # Upload the actual array data connected to the
+            # Grid2dRepresentation in one go.
+            records = await put_data_arrays(
+                ws,
+                dataspace,
+                # NOTE: This uses the data-object-type and uuid from the
+                # EpcExternalPartReference-object.
+                [get_data_object_type(epc)],
+                [epc.uuid],
+                # Fetch the key into the Hdf5-file (note that we do not use hdf5
+                # locally, but this is the key that will be used on the server).
+                [gri.grid2d_patch.geometry.points.zvalues.values.path_in_hdf_file],
+                [z_values],
+            )
+        else:
+            # Here z_values is too large for a single websocket message, and we
+            # have to upload it in several blocks.
+            records = await put_uninitialized_data_arrays(
+                ws,
+                dataspace,
+                [get_data_object_type(epc)],
+                [epc.uuid],
+                [gri.grid2d_patch.geometry.points.zvalues.values.path_in_hdf_file],
+                [z_values],
+            )
+            assert len(records) == 1
+            assert len(list(records[0])) == 1
+            assert list(records[0])[0] == "success"
 
-        # NOTE: All objects can be uploaded simultaneously by the call below:
-        # records = await put_data_objects(
-        #     ws,
-        #     dataspace,
-        #     [
-        #         get_data_object_type(epc),
-        #         get_data_object_type(crs),
-        #         get_data_object_type(gri),
-        #     ],
-        #     [
-        #         epc.uuid,
-        #         crs.uuid,
-        #         gri.uuid,
-        #     ],
-        #     [
-        #         str.encode(serializer.render(epc)),
-        #         str.encode(serializer.render(crs)),
-        #         str.encode(serializer.render(gri)),
-        #     ],
-        #     titles=[
-        #         epc.citation.title,
-        #         crs.citation.title,
-        #         gri.citation.title,
-        #     ],
-        # )
+            # Split matrix on rows, i.e., preserve the column shape for each
+            # block.
+            # TODO: Figure out if the max_payload_size includes the message
+            # header and body as well
+            z_blocks = np.array_split(
+                z_values,
+                np.ceil(z_values.size * 8 / max_payload_size),
+            )
 
-        # Upload the actual array data connected to the Grid2dRepresentation
-        records = await put_data_arrays(
-            ws,
-            dataspace,
-            # NOTE: This uses the data-object-type and uuid from the
-            # EpcExternalPartReference-object.
-            [get_data_object_type(epc)],
-            [epc.uuid],
-            # Fetch the key into the Hdf5-file (note that we do not use hdf5
-            # locally, but this is the key that will be used on the server).
-            [gri.grid2d_patch.geometry.points.zvalues.values.path_in_hdf_file],
-            [z_values],
-        )
+            # Upload each block separately.
+            starts = [0, 0]
+            for block in (pbar := tqdm.tqdm(z_blocks)):
+                pbar.set_description("Uploading subarrays")
+                records = await put_data_subarrays(
+                    ws,
+                    dataspace,
+                    [get_data_object_type(epc)],
+                    [epc.uuid],
+                    [gri.grid2d_patch.geometry.points.zvalues.values.path_in_hdf_file],
+                    [block],
+                    [starts],
+                )
+                # Increment row index to the next block.
+                starts[0] += block.shape[0]
 
         # Here we are done uploading all data to the ETP-server.
         # Next, we download the data again, and check that we have recovered
@@ -1049,10 +1229,17 @@ async def start_and_stop(
         # Verify that we are able to construct the same uris locally from
         # 'dataspace', the data-object-type and the corresponding uuid.
         assert (
-            get_data_object_uri(dataspace, epc.__class__.__name__, epc.uuid) in uris[0]
+            get_data_object_uri(dataspace, get_data_object_type(epc), epc.uuid)
+            in uris[0]
         )
-        assert get_data_object_uri(dataspace, crs.Meta.name, crs.uuid) in uris[0]
-        assert get_data_object_uri(dataspace, gri.Meta.name, gri.uuid) in uris[0]
+        assert (
+            get_data_object_uri(dataspace, get_data_object_type(crs), crs.uuid)
+            in uris[0]
+        )
+        assert (
+            get_data_object_uri(dataspace, get_data_object_type(gri), gri.uuid)
+            in uris[0]
+        )
 
         # Download all three data objects from the ETP-server.
         records = await get_data_objects(ws, uris)
@@ -1153,12 +1340,8 @@ async def start_and_stop(
         # Check that both ways give the same uri
         assert epc_uri == epc_uri_alt
 
-        # The metadata can be used to check the size of the array before
-        # requesting the data. We could then optionally request the array in
-        # several subarrays. If you know in advance that the full array can be
-        # returned in one go, then this step is not necessary.
-        # Here we use it to read out the shape of the array (which can be used
-        # to determine the size).
+        # Query the metadata of the array to figure out if we can fetch it in
+        # one go, or if we need fetch it in blocks.
         records = await get_data_array_metadata(
             ws,
             epc_uri,
@@ -1171,94 +1354,156 @@ async def start_and_stop(
         # Check that this is the same as the originally constructed array.
         assert z_shape == z_values.shape
 
-        # Request the full array in one go.
-        records = await get_data_arrays(
-            ws,
-            epc_uri,
-            dict(
-                grid=gri_r.grid2d_patch.geometry.points.zvalues.values.path_in_hdf_file
-            ),
-        )
+        # NOTE: For now we have to know the data type in advance as the ETP
+        # server does not seem to return the encoding of the returned array
+        # data. In this demo I will assume that we are working with float32
+        # which are 4 bytes long.
+        z_size_r = np.ceil(math.prod(z_shape) * 4)
+        assert z_size_r == z_size
 
-        assert len(records) == 1
-        data_arrays = records[0]["dataArrays"]
+        # Check if the returned array fits in a single websocket message
+        if z_size_r < max_payload_size:
+            # Request the full array in one go.
+            records = await get_data_arrays(
+                ws,
+                epc_uri,
+                dict(
+                    grid=gri_r.grid2d_patch.geometry.points.zvalues.values.path_in_hdf_file
+                ),
+            )
 
-        # Convert the data to a NumPy-array. Considering that we only requested
-        # a single array we could get rid of the dictionary wrapper here.
-        data = {
-            key: etp_data_array_to_numpy(records[0]["dataArrays"][key])
-            for key in sorted(data_arrays)
-        }
+            assert len(records) == 1
+            data_arrays = records[0]["dataArrays"]
 
-        # Check that the returned data is the same as the data we sent
-        assert data[sorted(data)[0]].shape == z_shape
-        np.testing.assert_allclose(
-            data[sorted(data)[0]],
-            z_values,
-        )
+            # Convert the data to a NumPy-array. Considering that we only requested
+            # a single array we could get rid of the dictionary wrapper here.
+            data = {
+                key: etp_data_array_to_numpy(records[0]["dataArrays"][key])
+                for key in sorted(data_arrays)
+            }
 
-        # Test the subarray capabilities. We request the full data array via
-        # three subarray blocks, and reconstruct the full array in the end.
-        # The shape of the blocks are:
-        #
-        #  [[sub_data_1, sub_data_2],
-        #   [      sub_data_3      ]]
-        #
-        # where each sub_data_n is a block-array.
-        records = await get_data_subarray(
-            ws,
-            epc_uri,
-            gri_r.grid2d_patch.geometry.points.zvalues.values.path_in_hdf_file,
-            starts=[0, 0],
-            counts=[2, 3],
-        )
+            # Check that the returned data is the same as the data we sent
+            assert data[sorted(data)[0]].shape == z_shape
+            np.testing.assert_allclose(
+                data[sorted(data)[0]],
+                z_values,
+            )
 
-        sub_data_1 = {
-            key: etp_data_array_to_numpy(records[0]["dataSubarrays"][key])
-            for key in sorted(records[0]["dataSubarrays"])
-        }
+            # Test the subarray capabilities. We request the full data array via
+            # three subarray blocks, and reconstruct the full array in the end.
+            # The shape of the blocks are:
+            #
+            #  [[sub_data_1, sub_data_2],
+            #   [      sub_data_3      ]]
+            #
+            # where each sub_data_n is a block-array.
+            records = await get_data_subarray(
+                ws,
+                epc_uri,
+                gri_r.grid2d_patch.geometry.points.zvalues.values.path_in_hdf_file,
+                starts=[0, 0],
+                counts=[2, 3],
+            )
 
-        records = await get_data_subarray(
-            ws,
-            epc_uri,
-            gri_r.grid2d_patch.geometry.points.zvalues.values.path_in_hdf_file,
-            starts=[0, 3],
-            counts=[2, z_values.shape[1] - 3],
-        )
-        sub_data_2 = {
-            key: etp_data_array_to_numpy(records[0]["dataSubarrays"][key])
-            for key in sorted(records[0]["dataSubarrays"])
-        }
+            sub_data_1 = {
+                key: etp_data_array_to_numpy(records[0]["dataSubarrays"][key])
+                for key in sorted(records[0]["dataSubarrays"])
+            }
 
-        records = await get_data_subarray(
-            ws,
-            epc_uri,
-            gri_r.grid2d_patch.geometry.points.zvalues.values.path_in_hdf_file,
-            starts=[2, 0],
-            counts=[z_values.shape[0] - 2, z_values.shape[1]],
-        )
-        sub_data_3 = {
-            key: etp_data_array_to_numpy(records[0]["dataSubarrays"][key])
-            for key in sorted(records[0]["dataSubarrays"])
-        }
+            records = await get_data_subarray(
+                ws,
+                epc_uri,
+                gri_r.grid2d_patch.geometry.points.zvalues.values.path_in_hdf_file,
+                starts=[0, 3],
+                counts=[2, z_values.shape[1] - 3],
+            )
+            sub_data_2 = {
+                key: etp_data_array_to_numpy(records[0]["dataSubarrays"][key])
+                for key in sorted(records[0]["dataSubarrays"])
+            }
 
-        # Reconstruct the full array from the three blocks.
-        subdata_rec = np.block(
-            [
-                [list(sub_data_1.values())[0], list(sub_data_2.values())[0]],
-                [list(sub_data_3.values())[0]],
-            ]
-        )
-        # Test that we have reconstructed the original data.
-        np.testing.assert_allclose(z_values, subdata_rec)
-        np.testing.assert_allclose(list(data.values())[0], subdata_rec)
+            records = await get_data_subarray(
+                ws,
+                epc_uri,
+                gri_r.grid2d_patch.geometry.points.zvalues.values.path_in_hdf_file,
+                starts=[2, 0],
+                counts=[z_values.shape[0] - 2, z_values.shape[1]],
+            )
+            sub_data_3 = {
+                key: etp_data_array_to_numpy(records[0]["dataSubarrays"][key])
+                for key in sorted(records[0]["dataSubarrays"])
+            }
 
-        # Delete a 'map' object, i. e., delete all the resources of the dataspace 
+            # Reconstruct the full array from the three blocks.
+            subdata_rec = np.block(
+                [
+                    [list(sub_data_1.values())[0], list(sub_data_2.values())[0]],
+                    [list(sub_data_3.values())[0]],
+                ]
+            )
+            # Test that we have reconstructed the original data.
+            np.testing.assert_allclose(z_values, subdata_rec)
+            np.testing.assert_allclose(list(data.values())[0], subdata_rec)
+
+        else:
+            # Use subarrays to fetch the full array in blocks.
+            num_blocks = int(np.ceil(z_size_r / max_payload_size))
+            # Split on rows, assuming that a single row is not too large. This code
+            # is based on the NumPy array_split-function here:
+            # https://github.com/numpy/numpy/blob/d35cd07ea997f033b2d89d349734c61f5de54b0d/numpy/lib/shape_base.py#L731-L784
+            num_each_section, extras = divmod(z_shape[0], num_blocks)
+            section_sizes = (
+                [0]
+                + extras * [num_each_section + 1]
+                + (num_blocks - extras) * [num_each_section]
+            )
+            div_points = np.array(section_sizes, dtype=int).cumsum()
+
+            starts_list = []
+            counts_list = []
+            for i in range(num_blocks):
+                starts_list.append([div_points[i], 0])
+                counts_list.append(
+                    [div_points[i + 1] - div_points[i], z_shape[1]],
+                )
+
+            blocks_r = []
+            for starts, counts in (
+                pbar := tqdm.tqdm(zip(starts_list, counts_list), total=len(starts_list))
+            ):
+                pbar.set_description("Downloading subarrays")
+                records = await get_data_subarrays(
+                    ws,
+                    dataspace,
+                    [get_data_object_type(epc_r)],
+                    [epc_r.uuid],
+                    [
+                        gri_r.grid2d_patch.geometry.points.zvalues.values.path_in_hdf_file
+                    ],
+                    [starts],
+                    [counts],
+                )
+                blocks_r.append(
+                    etp_data_array_to_numpy(records[0]["dataSubarrays"].popitem()[1])
+                )
+
+            # Check that we have received the requested number of blocks.
+            assert len(blocks_r) == num_blocks
+
+            # Assemble the full returned z_values array from the returned blocks.
+            z_values_r = np.concatenate(blocks_r, axis=0)
+
+            # Check that we have recieved the full array exactly as the one we
+            # uploaded.
+            assert z_values_r.shape == z_values.shape
+            np.testing.assert_allclose(z_values_r, z_values)
+
+        # Delete a 'map' object, i. e., delete all the resources of the dataspace
         # given their uris
         records = await get_resources(ws, dataspace)
         uris = [resource["uri"] for resource in records[0]["resources"]]
         records = await delete_data_objects(ws, uris, False)
-            
+
         # Test that all resources have been deleted
         records = await get_resources(ws, dataspace)
         assert len(records[0]["resources"]) == 0
@@ -1269,15 +1514,30 @@ async def start_and_stop(
 
 # Run the round-trip on localhost. This requires that the etp-server is running
 # locally.
-asyncio.run(start_and_stop())
+# Run the code for a "small" array (testing upload of the array data in one go).
+asyncio.run(start_and_stop(z_shape=(2000, 1990), scaling=1))
+# Run the code for a large array requiring blocks to be uploaded.
+asyncio.run(start_and_stop(z_shape=(5000, 7643), scaling=1))
 
 
 # Test on the published etp-server. This requires a token for Azure, and access
 # to the rddms-group. If the server crashes, please inform the rddms-group to
 # have it restarted.
+# Run the code for a "small" array
 # asyncio.run(
 #     start_and_stop(
 #         url="wss://interop-rddms.azure-api.net",
 #         headers={"Authorization": "Bearer " + get_token()},
+#         z_shape=(2000, 1990),
+#         scaling=1,
+#     ),
+# )
+# # Run the code for a large array
+# asyncio.run(
+#     start_and_stop(
+#         url="wss://interop-rddms.azure-api.net",
+#         headers={"Authorization": "Bearer " + get_token()},
+#         z_shape=(5000, 7643),
+#         scaling=1,
 #     ),
 # )
