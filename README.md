@@ -1,3 +1,7 @@
+# ARCHIVED
+See https://github.com/equinor/pyetp
+
+
 # Demo of using websockets in Python to communicate with an ETP server
 The purpose of this demo is to give some examples on how you can use websockets to communicate with an ETP v12 server. The standard can be downloaded from here: [https://publications.opengroup.org/standards/energistics-standards/energistics-transfer-protocol/v234](https://publications.opengroup.org/standards/energistics-standards/energistics-transfer-protocol/v234). The code in `talk_to_open_etp_server.py` demonstrates many of the protocols from the standard, and hopefully gives ideas on how other protocols can be added.
 
