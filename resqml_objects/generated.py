@@ -21505,15 +21505,15 @@ class ObjGeologicUnitInterpretation(AbstractFeatureInterpretation):
             "namespace": "http://www.energistics.org/energyml/data/resqmlv2",
         },
     )
-    geologic_unit_material_implacement: Optional[
-        GeologicUnitMaterialImplacement
-    ] = field(
-        default=None,
-        metadata={
-            "name": "GeologicUnitMaterialImplacement",
-            "type": "Element",
-            "namespace": "http://www.energistics.org/energyml/data/resqmlv2",
-        },
+    geologic_unit_material_implacement: Optional[GeologicUnitMaterialImplacement] = (
+        field(
+            default=None,
+            metadata={
+                "name": "GeologicUnitMaterialImplacement",
+                "type": "Element",
+                "namespace": "http://www.energistics.org/energyml/data/resqmlv2",
+            },
+        )
     )
 
 
