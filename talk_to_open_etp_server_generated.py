@@ -427,6 +427,31 @@ async def start_transaction(ws, read_only=False, message="", dataspace_uris=[""]
     )
 
 
+async def commit_transaction(ws, transaction_uuid):
+    mh_record = dict(
+        protocol=18,  # Transaction
+        messageType=3,  # CommitTransaction
+        correlationId=0,  # Ignored
+        messageId=await ClientMessageId.get_next_id(),
+        messageFlags=MHFlags.FIN.value,
+    )
+
+    ct_record = dict(transactionUuid=transaction_uuid)
+
+    await ws.send(
+        serialize_message(
+            mh_record,
+            ct_record,
+            "Energistics.Etp.v12.Protocol.Transaction.CommitTransaction",
+        )
+    )
+
+    return await handle_multipart_response(
+        ws,
+        "Energistics.Etp.v12.Protocol.Transaction.CommitTransactionResponse",
+    )
+
+
 async def put_data_objects(ws, dataspace, data_object_types, uuids, xmls, titles=None):
     # TODO: Use chunks if the data objects are too large for the websocket payload
 
@@ -1168,6 +1193,7 @@ async def start_and_stop(
             message="Testy-transy",
             dataspace_uris=dataspace_uris,
         )
+        transaction_uuid = records[0]["transactionUuid"]
 
         # NOTE: All objects can be uploaded simultaneously by the call below.
         # This is the recommended way of doing it as uploading a single object
@@ -1258,6 +1284,9 @@ async def start_and_stop(
                 )
                 # Increment row index to the next block.
                 starts[0] += block.shape[0]
+
+        # Commit the transfer of data objects and arrays
+        records = await commit_transaction(ws, transaction_uuid)
 
         # Here we are done uploading all data to the ETP-server.
         # Next, we download the data again, and check that we have recovered
