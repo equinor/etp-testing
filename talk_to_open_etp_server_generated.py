@@ -1301,7 +1301,7 @@ async def start_and_stop(
             [resource["uri"] for resource in record["resources"]] for record in records
         ]
 
-        assert len(uris) == 1 and len(uris[0]) == 3
+        assert len(uris) == 1 and len(uris[0]) == 5
         # Verify that we are able to construct the same uris locally from
         # 'dataspace', the data-object-type and the corresponding uuid.
         assert (
