@@ -193,6 +193,14 @@ async def request_session(
                 role="store",
             ),
             dict(
+                protocol=18,  # Transaction
+                protocolVersion=dict(
+                    major=1,
+                    minor=2,
+                ),
+                role="store",
+            ),
+            dict(
                 protocol=24,  # Dataspace
                 protocolVersion=dict(
                     major=1,
@@ -254,9 +262,8 @@ async def close_session(ws, reason):
         )
     )
 
-    await ws.wait_closed()
-    assert ws.closed
-    print(f"Websocket close reason: {ws.close_reason}")
+    await ws.close(reason=reason)
+    print(f"Websocket close reason: {reason}")
 
 
 async def handle_multipart_response(ws, schema_key):
@@ -388,6 +395,35 @@ async def delete_dataspaces(ws, dataspaces):
 
     return await handle_multipart_response(
         ws, "Energistics.Etp.v12.Protocol.Dataspace.DeleteDataspacesResponse"
+    )
+
+
+async def start_transaction(ws, read_only=False, message="", dataspace_uris=[""]):
+    mh_record = dict(
+        protocol=18,  # Transaction
+        messageType=1,  # StartTransaction
+        correlationId=0,  # Ignored
+        messageId=await ClientMessageId.get_next_id(),
+        messageFlags=MHFlags.FIN.value,
+    )
+
+    st_record = dict(
+        readOnly=read_only,
+        message=message,
+        dataspaceUris=dataspace_uris,
+    )
+
+    await ws.send(
+        serialize_message(
+            mh_record,
+            st_record,
+            "Energistics.Etp.v12.Protocol.Transaction.StartTransaction",
+        )
+    )
+
+    return await handle_multipart_response(
+        ws,
+        "Energistics.Etp.v12.Protocol.Transaction.StartTransactionResponse",
     )
 
 
@@ -908,7 +944,7 @@ async def start_and_stop(
     # be useful to test.
     async with websockets.connect(
         url,
-        extra_headers=headers,
+        additional_headers=headers,
         subprotocols=["etp12.energistics.org"],
         # This max_size parameter sets the maximum websocket frame size for
         # _incoming messages_.
@@ -952,14 +988,18 @@ async def start_and_stop(
 
         # Here 'dataspace' does not exist so we create it
         records = await put_dataspaces(ws, [dataspace])
+        records = await get_dataspaces(ws, store_last_write_filter=None)
         if verify:
             # Test to see that the dataspace now exists
-            records = await get_dataspaces(ws, store_last_write_filter=None)
             assert any(
                 ds["path"] == dataspace
                 for record in records
                 for ds in record["dataspaces"]
             )
+        dataspace_uris = [
+            records[0]["dataspaces"][i]["uri"]
+            for i in range(len(records[0]["dataspaces"]))
+        ]
         # Here 'dataspace' exists
 
         # Build the RESQML-objects "manually" from the generated dataclasses.
@@ -1121,6 +1161,13 @@ async def start_and_stop(
         # dataclass objects above to XML.
         config = SerializerConfig(pretty_print=True)
         serializer = XmlSerializer(config=config)
+
+        records = await start_transaction(
+            ws,
+            read_only=False,
+            message="Testy-transy",
+            dataspace_uris=dataspace_uris,
+        )
 
         # NOTE: All objects can be uploaded simultaneously by the call below.
         # This is the recommended way of doing it as uploading a single object
