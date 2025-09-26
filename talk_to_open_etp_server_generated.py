@@ -1190,7 +1190,7 @@ async def start_and_stop(
         records = await start_transaction(
             ws,
             read_only=False,
-            message="Testy-transy",
+            message="Upload data",
             dataspace_uris=dataspace_uris,
         )
         transaction_uuid = records[0]["transactionUuid"]
@@ -1591,11 +1591,25 @@ async def start_and_stop(
             assert z_values_r.shape == z_values.shape
             np.testing.assert_allclose(z_values_r, z_values)
 
-        # Delete a 'map' object, i. e., delete all the resources of the dataspace
-        # given their uris
+        # Get uris of all objects for deletion
         records = await get_resources(ws, dataspace)
         uris = [resource["uri"] for resource in records[0]["resources"]]
+
+        # Start a new transaction for deletion
+        records = await start_transaction(
+            ws,
+            read_only=False,
+            message="Delete data",
+            dataspace_uris=dataspace_uris,
+        )
+        transaction_uuid = records[0]["transactionUuid"]
+
+        # Delete a 'map' object, i. e., delete all the resources of the dataspace
+        # given their uris
         records = await delete_data_objects(ws, uris, False)
+
+        # Commit the deletion of the data objects
+        records = await commit_transaction(ws, transaction_uuid)
 
         # Test that all resources have been deleted
         records = await get_resources(ws, dataspace)
