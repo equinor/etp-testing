@@ -1064,7 +1064,7 @@ async def start_and_stop(
         # https://epsg.io/23029
         projected_epsg = 23029
 
-        crs = resqml_objects.LocalDepth3DCrs(
+        crs = resqml_objects.LocalDepth3dCrs(
             citation=resqml_objects.Citation(
                 title="Random CRS",
                 **common_citation_fields,
@@ -1078,7 +1078,7 @@ async def start_and_stop(
                 value=rotation,
                 uom=resqml_objects.PlaneAngleUom.DEGA,
             ),
-            projected_axis_order=resqml_objects.AxisOrder2D.EASTING_NORTHING,
+            projected_axis_order=resqml_objects.AxisOrder2d.EASTING_NORTHING,
             projected_uom=resqml_objects.LengthUom.M,
             vertical_uom=resqml_objects.LengthUom.M,
             zincreasing_downward=True,
@@ -1107,7 +1107,7 @@ async def start_and_stop(
         dx = x0 / z_values.shape[0]
         dy = y0 / z_values.shape[1]
 
-        gri = resqml_objects.Grid2DRepresentation(
+        gri = resqml_objects.Grid2dRepresentation(
             uuid=(grid_uuid := str(uuid.uuid4())),
             schema_version=schema_version,
             surface_role=resqml_objects.SurfaceRole.MAP,
@@ -1115,7 +1115,7 @@ async def start_and_stop(
                 title="Random z-values",
                 **common_citation_fields,
             ),
-            grid2d_patch=resqml_objects.Grid2DPatch(
+            grid2d_patch=resqml_objects.Grid2dPatch(
                 # TODO: Perhaps we can use this for tiling?
                 patch_index=0,
                 # NumPy-arrays are C-ordered, meaning that the last index is
@@ -1133,17 +1133,17 @@ async def start_and_stop(
                         title=crs.citation.title,
                         uuid=crs.uuid,
                     ),
-                    points=resqml_objects.Point3DZvalueArray(
-                        supporting_geometry=resqml_objects.Point3DLatticeArray(
-                            origin=resqml_objects.Point3D(
+                    points=resqml_objects.Point3dZValueArray(
+                        supporting_geometry=resqml_objects.Point3dLatticeArray(
+                            origin=resqml_objects.Point3d(
                                 coordinate1=x0,
                                 coordinate2=y0,
                                 coordinate3=0.0,
                             ),
                             offset=[
                                 # Offset for the y-direction, i.e., the fastest axis
-                                resqml_objects.Point3DOffset(
-                                    offset=resqml_objects.Point3D(
+                                resqml_objects.Point3dOffset(
+                                    offset=resqml_objects.Point3d(
                                         coordinate1=0.0,
                                         coordinate2=1.0,
                                         coordinate3=0.0,
@@ -1154,8 +1154,8 @@ async def start_and_stop(
                                     ),
                                 ),
                                 # Offset for the x-direction, i.e., the slowest axis
-                                resqml_objects.Point3DOffset(
-                                    offset=resqml_objects.Point3D(
+                                resqml_objects.Point3dOffset(
+                                    offset=resqml_objects.Point3d(
                                         coordinate1=1.0,
                                         coordinate2=0.0,
                                         coordinate3=0.0,
@@ -1296,7 +1296,9 @@ async def start_and_stop(
         records = await get_resources(ws, dataspace)
 
         # Fetch all uris (remember, we have deleted everything, so there should
-        # only be three uris for the epc, crs and the gri-objects).
+        # only be three uris for the epc, crs and the gri-objects, and two more
+        # that the ETP-server sets up; the Activity- and
+        # ActivityTemplate-objects.).
         uris = [
             [resource["uri"] for resource in record["resources"]] for record in records
         ]
@@ -1317,10 +1319,10 @@ async def start_and_stop(
             in uris[0]
         )
 
-        # Download all three data objects from the ETP-server.
+        # Download all five data objects from the ETP-server.
         records = await get_data_objects(ws, uris)
         # Check that all objects were downloaded in one go (these could be
-        # split up into three different get_data_objects-calls, similarly to
+        # split up into five different get_data_objects-calls, similarly to
         # the put_data_objects-calls above).
         assert len(records) == 1
 
@@ -1331,6 +1333,9 @@ async def start_and_stop(
         epc_key = next(filter(lambda x: "EpcExternalPartReference" in x, keys))
         crs_key = next(filter(lambda x: "LocalDepth3dCrs" in x, keys))
         gri_key = next(filter(lambda x: "Grid2dRepresentation" in x, keys))
+
+        act_key = next(filter(lambda x: "obj_Activity(" in x, keys))
+        ate_key = next(filter(lambda x: "obj_ActivityTemplate" in x, keys))
 
         # Set up an XML-parser from xsdata.
         parser = XmlParser(context=XmlContext())
@@ -1343,12 +1348,24 @@ async def start_and_stop(
         )
         crs_r = parser.from_bytes(
             data_objects[crs_key]["data"],
-            resqml_objects.LocalDepth3DCrs,
+            resqml_objects.LocalDepth3dCrs,
         )
         gri_r = parser.from_bytes(
             data_objects[gri_key]["data"],
-            resqml_objects.Grid2DRepresentation,
+            resqml_objects.Grid2dRepresentation,
         )
+
+        # The Activity- and ActivityTemplate-objects are interpreted as
+        # DerivedElement-objects. We can fetch the actual objects by picking
+        # out the ".value"-field.
+        act_r = parser.from_bytes(
+            data_objects[act_key]["data"],
+            resqml_objects.obj_Activity,
+        ).value
+        ate_r = parser.from_bytes(
+            data_objects[ate_key]["data"],
+            resqml_objects.obj_ActivityTemplate,
+        ).value
 
         # Test that the returned objects are the same as the ones that were
         # uploaded. Note that this comparison are on the values inside the
