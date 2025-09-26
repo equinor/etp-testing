@@ -10,7 +10,7 @@ Set up the `open-etp-server` ([https://community.opengroup.org/osdu/platform/dom
 ```
 docker compose up --detach
 ```
-Next, install Python (tested with Python 3.11.6) requirements in a virtual environment with:
+Next, install Python requirements in a virtual environment with:
 ```
 python -m venv venv
 source venv/bin/activate
@@ -18,6 +18,6 @@ pip install pip --upgrade && pip install -r requirements.txt
 ```
 Finally, run:
 ```
-python talk_to_open_etp_server.py
+python talk_to_open_etp_server_generated.py
 ```
 which does a roundtrip exercise with a small RESQML `Grid2dRepresentation`-object of random values.
