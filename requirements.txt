@@ -4,7 +4,7 @@ black
 fastavro
 httpx
 lxml
-numpy==1.22.2
+numpy
 resqpy
 xsdata
 setuptools>=65.5.1 # not directly required, pinned by Snyk to avoid a vulnerability
